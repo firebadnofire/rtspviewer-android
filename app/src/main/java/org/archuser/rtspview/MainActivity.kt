@@ -1,3 +1,5 @@
+@file:Suppress("SpellCheckingInspection")
+
 package org.archuser.rtspview
 
 import android.os.Bundle
@@ -81,7 +83,7 @@ private const val DEFAULT_CHANNEL = "1"
 private const val DEFAULT_SUBTYPE = "0"
 private const val DEFAULT_LATENCY_MS = 100
 
-private enum class RtspTransport(val title: String) {
+enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
@@ -135,7 +137,8 @@ data class CameraConfig(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
+@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -216,7 +219,7 @@ fun RtspViewerApp() {
             )
             .build()
 
-        val timeoutMs = max(5_000, normalized.latencyMs * 10)
+        val timeoutMs = max(5_000, normalized.latencyMs * 10).toLong()
         val mediaSource = RtspMediaSource.Factory()
             .setForceUseRtpTcp(normalized.transport == RtspTransport.TCP)
             .setTimeoutMs(timeoutMs)
