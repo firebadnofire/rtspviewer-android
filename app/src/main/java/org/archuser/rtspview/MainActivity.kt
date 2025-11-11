@@ -83,12 +83,12 @@ private const val DEFAULT_CHANNEL = "1"
 private const val DEFAULT_SUBTYPE = "0"
 private const val DEFAULT_LATENCY_MS = 100
 
-enum class RtspTransport(val title: String) {
+private enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
 
-data class CameraConfig(
+private data class CameraConfig(
     val title: String = "",
     val username: String = "",
     val password: String = "",
@@ -196,6 +196,7 @@ fun RtspViewerApp() {
             ?.previewUrl(includePassword = false)
     }
 
+    @UnstableApi
     fun connectToCamera() {
         val normalized = config.normalized()
         val error = normalized.validationError()
@@ -281,7 +282,7 @@ fun RtspViewerApp() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             PlayerCard(
-                player = player,
+                exoPlayer = player,
                 statusText = statusText,
                 isPlaying = isPlaying,
                 currentUrl = currentPreviewUrl
@@ -309,7 +310,7 @@ fun RtspViewerApp() {
 
 @Composable
 private fun PlayerCard(
-    player: ExoPlayer,
+    exoPlayer: ExoPlayer,
     statusText: String,
     isPlaying: Boolean,
     currentUrl: String?
@@ -330,12 +331,12 @@ private fun PlayerCard(
                     PlayerView(context).apply {
                         useController = true
                         setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                        controllerShowTimeoutMs = 0
-                        player = this@PlayerCard.player
+                        setControllerShowTimeoutMs(0)
+                        player = exoPlayer
                     }
                 },
                 update = { view ->
-                    view.player = player
+                    view.player = exoPlayer
                     view.keepScreenOn = isPlaying
                 }
             )
@@ -612,6 +613,7 @@ private fun SavedCamerasSection(
 }
 
 @Preview(showBackground = true)
+@UnstableApi
 @Composable
 private fun PreviewRtspViewer() {
     RTSPViewTheme {
