@@ -308,6 +308,7 @@ fun RtspViewerApp() {
     }
 }
 
+@UnstableApi
 @Composable
 private fun PlayerCard(
     exoPlayer: ExoPlayer,
