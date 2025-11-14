@@ -47,8 +47,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consumePositionChange
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -144,7 +147,7 @@ private data class CameraConfig(
     }
 }
 
-@UnstableApi
+@OptIn(UnstableApi::class)
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
@@ -262,9 +265,9 @@ fun RtspViewerApp() {
             .pointerInput(selectedIndex) {
                 detectDragGestures(
                     onDragStart = { dragOffset = 0f },
-                    onDrag = { change, dragAmount ->
+                    onDrag = { change: PointerInputChange, dragAmount: Offset ->
                         dragOffset += dragAmount.x
-                        change.consumePositionChange()
+                        change.consume()
                     },
                     onDragEnd = {
                         when {
