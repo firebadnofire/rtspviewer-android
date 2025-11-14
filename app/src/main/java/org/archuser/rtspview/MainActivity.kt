@@ -88,8 +88,8 @@ import java.io.OutputStreamWriter
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+@UnstableApi
 class MainActivity : ComponentActivity() {
-    @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -167,7 +167,7 @@ private data class CameraConfig(
     }
 }
 
-@OptIn(UnstableApi::class)
+@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
@@ -688,7 +688,7 @@ private fun parseCameraSettings(json: String?): List<CameraConfig>? {
                 )
             }
         }
-    } catch (error: JSONException) {
+    } catch (_: JSONException) {
         null
     }
 }
