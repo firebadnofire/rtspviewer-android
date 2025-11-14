@@ -47,10 +47,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -147,7 +145,7 @@ private data class CameraConfig(
     }
 }
 
-@OptIn(UnstableApi::class)
+@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
@@ -253,6 +251,7 @@ fun RtspViewerApp() {
 
     LaunchedEffect(controlsVisible, settingsVisible) {
         if (controlsVisible && !settingsVisible) {
+            // When the settings drawer is hidden, fade controls back out after a brief pause.
             delay(HIDE_CONTROLS_DELAY_MS)
             controlsVisible = false
         }
@@ -265,9 +264,9 @@ fun RtspViewerApp() {
             .pointerInput(selectedIndex) {
                 detectDragGestures(
                     onDragStart = { dragOffset = 0f },
-                    onDrag = { change: PointerInputChange, dragAmount: Offset ->
+                    onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consume()
+                        change.consumePositionChange()
                     },
                     onDragEnd = {
                         when {
@@ -285,9 +284,6 @@ fun RtspViewerApp() {
                 detectTapGestures(
                     onTap = {
                         controlsVisible = true
-                        if (!settingsVisible) {
-                            // visibility state change will retrigger auto-hide timer
-                        }
                     }
                 )
             }
