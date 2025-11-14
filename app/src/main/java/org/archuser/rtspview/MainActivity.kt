@@ -2,10 +2,14 @@
 
 package org.archuser.rtspview
 
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -45,11 +49,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consumePositionChange
+import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -66,7 +72,17 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -90,6 +106,9 @@ private const val DEFAULT_LATENCY_MS = 100
 private const val SLOT_COUNT = 16
 private const val HIDE_CONTROLS_DELAY_MS = 5_000L
 private const val DRAG_THRESHOLD = 120f
+private const val PREFS_NAME = "camera_settings"
+private const val PREFS_KEY_SLOTS = "slots"
+private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
 
 private enum class RtspTransport(val title: String) {
     TCP("TCP"),
@@ -149,6 +168,8 @@ private data class CameraConfig(
 @androidx.media3.common.util.UnstableApi
 fun RtspViewerApp() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
@@ -166,6 +187,42 @@ fun RtspViewerApp() {
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    var hasLoadedSettings by remember { mutableStateOf(false) }
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            coroutineScope.launch { exportCameraSettings(context, uri, cameraSlots) }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val imported = importCameraSettings(context, uri)
+                if (imported != null) {
+                    applyCameraSettings(cameraSlots, imported)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(sharedPreferences) {
+        val stored = sharedPreferences.getString(PREFS_KEY_SLOTS, null)
+        val configs = parseCameraSettings(stored)
+        if (configs != null) {
+            applyCameraSettings(cameraSlots, configs)
+        }
+        hasLoadedSettings = true
+    }
+
+    LaunchedEffect(hasLoadedSettings) {
+        if (!hasLoadedSettings) return@LaunchedEffect
+        snapshotFlow { cameraSlots.map { it } }
+            .collectLatest { configs ->
+                sharedPreferences.edit()
+                    .putString(PREFS_KEY_SLOTS, serializeCameraSettings(configs))
+                    .apply()
+            }
+    }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -266,7 +323,7 @@ fun RtspViewerApp() {
                     onDragStart = { dragOffset = 0f },
                     onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consumePositionChange()
+                        change.consume()
                     },
                     onDragEnd = {
                         when {
@@ -378,6 +435,26 @@ fun RtspViewerApp() {
                             )
                             TextButton(onClick = { settingsVisible = false }) {
                                 Text("Close")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { exportLauncher.launch(EXPORT_FILE_NAME) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Export")
+                            }
+                            OutlinedButton(
+                                onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Import")
                             }
                         }
 
@@ -559,4 +636,89 @@ private fun CameraSlotEditor(
             }
         }
     }
+}
+
+private fun serializeCameraSettings(configs: List<CameraConfig>): String {
+    val array = JSONArray()
+    configs.take(SLOT_COUNT).forEach { config ->
+        array.put(
+            JSONObject().apply {
+                put("title", config.title)
+                put("username", config.username)
+                put("password", config.password)
+                put("host", config.host)
+                put("port", config.port)
+                put("slug", config.slug)
+                put("channel", config.channel)
+                put("subtype", config.subtype)
+                put("transport", config.transport.name)
+                put("latencyMs", config.latencyMs)
+            }
+        )
+    }
+    return array.toString()
+}
+
+private fun parseCameraSettings(json: String?): List<CameraConfig>? {
+    if (json.isNullOrBlank()) return null
+    return try {
+        val array = JSONArray(json)
+        buildList {
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index) ?: continue
+                add(
+                    CameraConfig(
+                        title = obj.optString("title"),
+                        username = obj.optString("username"),
+                        password = obj.optString("password"),
+                        host = obj.optString("host"),
+                        port = obj.optString("port", DEFAULT_PORT),
+                        slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
+                        channel = obj.optString("channel", DEFAULT_CHANNEL),
+                        subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
+                        transport = obj.optString("transport").let { stored ->
+                            RtspTransport.entries.firstOrNull { it.name == stored } ?: RtspTransport.TCP
+                        },
+                        latencyMs = obj.optInt("latencyMs", DEFAULT_LATENCY_MS)
+                    )
+                )
+            }
+        }
+    } catch (error: JSONException) {
+        null
+    }
+}
+
+private fun applyCameraSettings(target: MutableList<CameraConfig>, configs: List<CameraConfig>) {
+    configs.take(SLOT_COUNT).forEachIndexed { index, config ->
+        if (index < target.size) {
+            target[index] = config
+        }
+    }
+    for (index in configs.size until SLOT_COUNT) {
+        if (index < target.size) {
+            target[index] = CameraConfig()
+        }
+    }
+}
+
+private suspend fun exportCameraSettings(context: Context, uri: Uri, configs: List<CameraConfig>) {
+    withContext(Dispatchers.IO) {
+        context.contentResolver.openOutputStream(uri)?.use { stream ->
+            OutputStreamWriter(stream).use { writer ->
+                writer.write(serializeCameraSettings(configs))
+            }
+        }
+    }
+}
+
+private suspend fun importCameraSettings(context: Context, uri: Uri): List<CameraConfig>? {
+    val json = withContext(Dispatchers.IO) {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            BufferedReader(InputStreamReader(stream)).use { reader ->
+                reader.readText()
+            }
+        }
+    }
+    return parseCameraSettings(json)
 }
