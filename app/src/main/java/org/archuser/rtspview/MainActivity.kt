@@ -55,7 +55,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +70,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import androidx.media3.common.util.UnstableApi
+import androidx.core.content.edit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -86,6 +87,7 @@ import java.io.OutputStreamWriter
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+@OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -165,7 +167,7 @@ private data class CameraConfig(
 }
 
 @Composable
-@androidx.media3.common.util.UnstableApi
+@UnstableApi
 fun RtspViewerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -218,9 +220,9 @@ fun RtspViewerApp() {
         if (!hasLoadedSettings) return@LaunchedEffect
         snapshotFlow { cameraSlots.map { it } }
             .collectLatest { configs ->
-                sharedPreferences.edit()
-                    .putString(PREFS_KEY_SLOTS, serializeCameraSettings(configs))
-                    .apply()
+                sharedPreferences.edit {
+                    putString(PREFS_KEY_SLOTS, serializeCameraSettings(configs))
+                }
             }
     }
 
@@ -319,11 +321,12 @@ fun RtspViewerApp() {
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(selectedIndex) {
+                @Suppress("DEPRECATION")
                 detectDragGestures(
                     onDragStart = { dragOffset = 0f },
                     onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consume()
+                        change.consumePositionChange()
                     },
                     onDragEnd = {
                         when {
