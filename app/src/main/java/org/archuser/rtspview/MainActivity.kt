@@ -1,5 +1,4 @@
 @file:Suppress("SpellCheckingInspection")
-@file:OptIn(UnstableApi::class)
 
 package org.archuser.rtspview
 
@@ -50,7 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -63,7 +62,6 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
@@ -148,6 +146,7 @@ private data class CameraConfig(
 }
 
 @Composable
+@androidx.media3.common.util.UnstableApi
 fun RtspViewerApp() {
     val context = LocalContext.current
     val player = remember {
@@ -267,7 +266,7 @@ fun RtspViewerApp() {
                     onDragStart = { dragOffset = 0f },
                     onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consume()
+                        change.consumePositionChange()
                     },
                     onDragEnd = {
                         when {
