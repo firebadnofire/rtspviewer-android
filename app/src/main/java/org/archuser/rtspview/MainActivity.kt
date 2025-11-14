@@ -55,6 +55,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -87,8 +88,8 @@ import java.io.OutputStreamWriter
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-@OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
+    @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -321,12 +322,11 @@ fun RtspViewerApp() {
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(selectedIndex) {
-                @Suppress("DEPRECATION")
                 detectDragGestures(
                     onDragStart = { dragOffset = 0f },
                     onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consumePositionChange()
+                        change.consume()
                     },
                     onDragEnd = {
                         when {
