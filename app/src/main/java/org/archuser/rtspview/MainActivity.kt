@@ -55,7 +55,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -167,8 +167,8 @@ private data class CameraConfig(
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
-@UnstableApi
 fun RtspViewerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -326,7 +326,8 @@ fun RtspViewerApp() {
                     onDragStart = { dragOffset = 0f },
                     onDrag = { change, dragAmount ->
                         dragOffset += dragAmount.x
-                        change.consume()
+                        @Suppress("DEPRECATION")
+                        change.consumePositionChange()
                     },
                     onDragEnd = {
                         when {
