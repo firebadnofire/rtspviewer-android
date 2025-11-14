@@ -14,7 +14,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,7 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -144,7 +144,7 @@ private data class CameraConfig(
     }
 }
 
-@OptIn(UnstableApi::class)
+@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
@@ -260,10 +260,11 @@ fun RtspViewerApp() {
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(selectedIndex) {
-                detectHorizontalDragGestures(
-                    onHorizontalDrag = { change, dragAmount ->
-                        dragOffset += dragAmount
-                        change.consume()
+                detectDragGestures(
+                    onDragStart = { dragOffset = 0f },
+                    onDrag = { change, dragAmount ->
+                        dragOffset += dragAmount.x
+                        change.consumePositionChange()
                     },
                     onDragEnd = {
                         when {
@@ -517,7 +518,7 @@ private fun CameraSlotEditor(
                     fontWeight = FontWeight.Medium
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RtspTransport.values().forEach { transport ->
+                    RtspTransport.entries.forEach { transport ->
                         FilterChip(
                             selected = config.transport == transport,
                             onClick = { onConfigChange(config.copy(transport = transport)) },
