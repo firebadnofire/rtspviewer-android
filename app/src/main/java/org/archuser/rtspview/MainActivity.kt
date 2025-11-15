@@ -137,8 +137,8 @@ private data class CameraConfig(
         host = host.trim(),
         port = port.trim().ifEmpty { DEFAULT_PORT },
         slug = slug.trim().ifEmpty { DEFAULT_CAMERA_SLUG },
-        channel = channel.trim().ifEmpty { DEFAULT_CHANNEL },
-        subtype = subtype.trim().ifEmpty { DEFAULT_SUBTYPE },
+        channel = channel.trim(),
+        subtype = subtype.trim(),
         latencyMs = latencyMs.coerceIn(0, 2_000)
     )
 
@@ -150,21 +150,63 @@ private data class CameraConfig(
     fun displayName(): String =
         title.ifBlank { host.ifBlank { "RTSP Stream" } }
 
-    fun previewUrl(includePassword: Boolean = false): String {
+    fun toRtspUri(includePassword: Boolean = false): Uri {
         val normalized = normalized()
+        val portString = normalized.port.trim().ifEmpty { DEFAULT_PORT }
+        val sanitizedPort = portString.toIntOrNull()?.toString() ?: DEFAULT_PORT
         val credential = buildString {
             if (normalized.username.isNotEmpty()) {
-                append(normalized.username)
+                append(Uri.encode(normalized.username))
                 if (normalized.password.isNotEmpty() && includePassword) {
                     append(":")
-                    append(normalized.password)
+                    append(Uri.encode(normalized.password))
                 }
                 append("@")
             }
         }
-        val query = "?channel=${normalized.channel}&subtype=${normalized.subtype}"
-        return "rtsp://$credential${normalized.host}:${normalized.port}${normalized.slug}$query"
+        val normalizedHost = normalized.host.trim()
+        val authorityHost = if (":" in normalizedHost && !normalizedHost.startsWith("[")) {
+            "[$normalizedHost]"
+        } else {
+            normalizedHost
+        }
+        val authority = buildString {
+            append(credential)
+            append(authorityHost)
+            append(":")
+            append(sanitizedPort)
+        }
+
+        val trimmedSlug = normalized.slug.trim()
+        val slugUri = if (trimmedSlug.isNotEmpty()) {
+            Uri.parse("rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}")
+        } else {
+            null
+        }
+        val existingQueryParams = slugUri?.queryParameterNames.orEmpty()
+
+        return Uri.Builder()
+            .scheme("rtsp")
+            .encodedAuthority(authority)
+            .apply {
+                slugUri?.path?.takeIf { it.isNotEmpty() }?.let { encodedPath(it) }
+                slugUri?.queryParameterNames?.forEach { name ->
+                    slugUri.getQueryParameters(name).forEach { value ->
+                            appendQueryParameter(name, value)
+                    }
+                }
+                if (normalized.channel.isNotBlank() && "channel" !in existingQueryParams) {
+                    appendQueryParameter("channel", normalized.channel)
+                }
+                if (normalized.subtype.isNotBlank() && "subtype" !in existingQueryParams) {
+                    appendQueryParameter("subtype", normalized.subtype)
+                }
+            }
+            .build()
     }
+
+    fun previewUrl(includePassword: Boolean = false): String =
+        toRtspUri(includePassword).toString()
 }
 
 @UnstableApi
@@ -244,7 +286,8 @@ fun RtspViewerApp() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                statusText = "Error: ${error.errorCodeName}"
+                val detail = error.message ?: "Unknown"
+                statusText = "Error: ${error.errorCodeName} ($detail)"
             }
         }
         player.addListener(listener)
@@ -271,8 +314,9 @@ fun RtspViewerApp() {
             return
         }
 
+        val playbackUri = normalized.toRtspUri(includePassword = true)
         val mediaItem = MediaItem.Builder()
-            .setUri(normalized.previewUrl(includePassword = true))
+            .setUri(playbackUri)
             .setMimeType(MimeTypes.APPLICATION_RTSP)
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -293,11 +337,11 @@ fun RtspViewerApp() {
             .createMediaSource(mediaItem)
 
         statusText = "Connecting…"
-        currentPreviewUrl = normalized.previewUrl(includePassword = false)
+        currentPreviewUrl = normalized.toRtspUri(includePassword = false).toString()
         player.stop()
-        player.setMediaSource(mediaSource)
+        player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
-        player.playWhenReady = true
+        player.play()
     }
 
     fun selectSlot(newIndex: Int, connect: Boolean) {
