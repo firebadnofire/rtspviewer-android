@@ -2,6 +2,7 @@
 
 package org.archuser.rtspview
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.content.pm.ActivityInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -213,6 +215,7 @@ private data class CameraConfig(
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
+    val activity = context as? Activity
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val player = remember {
@@ -233,6 +236,21 @@ fun RtspViewerApp() {
     var settingsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activity, settingsVisible) {
+        val hostActivity = activity ?: return@LaunchedEffect
+        hostActivity.requestedOrientation = if (settingsVisible) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    DisposableEffect(activity) {
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
