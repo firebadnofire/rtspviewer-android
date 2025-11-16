@@ -25,12 +25,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -400,6 +404,8 @@ fun RtspViewerApp() {
                 onCancel = { settingsVisible = false }
             )
         } else {
+            val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -449,6 +455,7 @@ fun RtspViewerApp() {
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
+                        .padding(safeDrawingPadding)
                         .padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -478,6 +485,7 @@ fun RtspViewerApp() {
                     visible = controlsVisible,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
+                        .padding(safeDrawingPadding)
                         .padding(24.dp),
                     enter = fadeIn(animationSpec = tween(durationMillis = 150)),
                     exit = fadeOut(animationSpec = tween(durationMillis = 150))
@@ -520,6 +528,7 @@ private fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(horizontal = 24.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
