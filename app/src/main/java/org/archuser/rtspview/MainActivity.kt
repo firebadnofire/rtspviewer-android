@@ -3,6 +3,7 @@
 package org.archuser.rtspview
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,7 +16,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -57,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -213,6 +217,8 @@ private data class CameraConfig(
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val player = remember {
@@ -450,20 +456,43 @@ fun RtspViewerApp() {
 
         AnimatedVisibility(
             visible = settingsVisible,
-            enter = fadeIn(animationSpec = tween(150)) + slideInHorizontally(initialOffsetX = { it / 2 }),
-            exit = fadeOut(animationSpec = tween(150)) + slideOutHorizontally(targetOffsetX = { it / 2 })
+            enter = if (isLandscape) {
+                fadeIn(animationSpec = tween(150)) + slideInHorizontally(initialOffsetX = { it / 2 })
+            } else {
+                fadeIn(animationSpec = tween(150)) + slideInVertically(initialOffsetY = { it / 2 })
+            },
+            exit = if (isLandscape) {
+                fadeOut(animationSpec = tween(150)) + slideOutHorizontally(targetOffsetX = { it / 2 })
+            } else {
+                fadeOut(animationSpec = tween(150)) + slideOutVertically(targetOffsetY = { it / 2 })
+            }
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.4f))
-                    .padding(start = 72.dp)
+                    .then(
+                        if (isLandscape) {
+                            Modifier.padding(start = 72.dp)
+                        } else {
+                            Modifier.padding(top = 72.dp)
+                        }
+                    )
             ) {
-                Surface(
-                    modifier = Modifier
+                val sheetModifier = if (isLandscape) {
+                    Modifier
                         .fillMaxHeight()
                         .align(Alignment.CenterEnd)
-                        .fillMaxWidth(0.55f),
+                        .fillMaxWidth(0.55f)
+                } else {
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.75f)
+                }
+
+                Surface(
+                    modifier = sheetModifier,
                     tonalElevation = 6.dp
                 ) {
                     Column(
