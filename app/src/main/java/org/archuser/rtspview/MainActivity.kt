@@ -3,7 +3,6 @@
 package org.archuser.rtspview
 
 import android.content.Context
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -12,13 +11,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -28,7 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -60,7 +56,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -217,8 +212,6 @@ private data class CameraConfig(
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val player = remember {
@@ -234,6 +227,9 @@ fun RtspViewerApp() {
     val cameraSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
+    val editingSlots = remember {
+        mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
+    }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
@@ -242,7 +238,10 @@ fun RtspViewerApp() {
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
-            coroutineScope.launch { exportCameraSettings(context, uri, cameraSlots) }
+            coroutineScope.launch {
+                val configs = if (settingsVisible) editingSlots else cameraSlots
+                exportCameraSettings(context, uri, configs)
+            }
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -250,7 +249,11 @@ fun RtspViewerApp() {
             coroutineScope.launch {
                 val imported = importCameraSettings(context, uri)
                 if (imported != null) {
-                    applyCameraSettings(cameraSlots, imported)
+                    if (settingsVisible) {
+                        applyCameraSettings(editingSlots, imported)
+                    } else {
+                        applyCameraSettings(cameraSlots, imported)
+                    }
                 }
             }
         }
@@ -359,210 +362,219 @@ fun RtspViewerApp() {
         }
     }
 
+    fun openSettings() {
+        applyCameraSettings(editingSlots, cameraSlots)
+        settingsVisible = true
+        controlsVisible = true
+    }
+
+    fun saveSettings() {
+        val wasPlaying = isPlaying || currentPreviewUrl != null
+        applyCameraSettings(cameraSlots, editingSlots)
+        if (wasPlaying) {
+            stopPlayback("Settings updated")
+        } else if (cameraSlots[selectedIndex].validationError() != null) {
+            stopPlayback("No camera selected")
+        }
+        settingsVisible = false
+    }
+
     LaunchedEffect(controlsVisible, settingsVisible) {
         if (controlsVisible && !settingsVisible) {
-            // When the settings drawer is hidden, fade controls back out after a brief pause.
+            // When the settings screen is hidden, fade controls back out after a brief pause.
             delay(HIDE_CONTROLS_DELAY_MS)
             controlsVisible = false
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(selectedIndex) {
-                detectDragGestures(
-                    onDragStart = { dragOffset = 0f },
-                    onDrag = { change, dragAmount ->
-                        dragOffset += dragAmount.x
-                        @Suppress("DEPRECATION")
-                        change.consumePositionChange()
-                    },
-                    onDragEnd = {
-                        when {
-                            dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
-                            dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
-                        }
-                        dragOffset = 0f
-                    },
-                    onDragCancel = {
-                        dragOffset = 0f
-                    }
-                )
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = {
-                        controlsVisible = true
-                    }
-                )
-            }
-    ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                PlayerView(context).apply {
-                    useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                }
-            },
-            update = { view ->
-                view.player = player
-                view.keepScreenOn = isPlaying
-            }
-        )
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "Camera ${selectedIndex + 1}",
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+    Crossfade(targetState = settingsVisible, label = "settings_screen") { showSettings ->
+        if (showSettings) {
+            SettingsScreen(
+                slots = editingSlots,
+                selectedIndex = selectedIndex,
+                onSlotChange = { index, updated -> editingSlots[index] = updated },
+                onClearSlot = { index -> editingSlots[index] = CameraConfig() },
+                onExport = { exportLauncher.launch(EXPORT_FILE_NAME) },
+                onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) },
+                onSave = { saveSettings() },
+                onCancel = { settingsVisible = false }
             )
-            Text(
-                text = statusText,
-                color = Color.White.copy(alpha = 0.9f),
-                style = MaterialTheme.typography.bodyMedium
-            )
-            currentPreviewUrl?.let { url ->
-                Text(
-                    text = url,
-                    color = Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = controlsVisible || settingsVisible,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(24.dp),
-            enter = fadeIn(animationSpec = tween(durationMillis = 150)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 150))
-        ) {
-            Button(onClick = { settingsVisible = true; controlsVisible = true }) {
-                Text("Settings")
-            }
-        }
-
-        AnimatedVisibility(
-            visible = settingsVisible,
-            enter = if (isLandscape) {
-                fadeIn(animationSpec = tween(150)) + slideInHorizontally(initialOffsetX = { it / 2 })
-            } else {
-                fadeIn(animationSpec = tween(150)) + slideInVertically(initialOffsetY = { it / 2 })
-            },
-            exit = if (isLandscape) {
-                fadeOut(animationSpec = tween(150)) + slideOutHorizontally(targetOffsetX = { it / 2 })
-            } else {
-                fadeOut(animationSpec = tween(150)) + slideOutVertically(targetOffsetY = { it / 2 })
-            }
-        ) {
+        } else {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
-                    .then(
-                        if (isLandscape) {
-                            Modifier.padding(start = 72.dp)
-                        } else {
-                            Modifier.padding(top = 72.dp)
-                        }
-                    )
+                    .background(Color.Black)
+                    .pointerInput(selectedIndex) {
+                        detectDragGestures(
+                            onDragStart = { dragOffset = 0f },
+                            onDrag = { change, dragAmount ->
+                                dragOffset += dragAmount.x
+                                @Suppress("DEPRECATION")
+                                change.consumePositionChange()
+                            },
+                            onDragEnd = {
+                                when {
+                                    dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
+                                    dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                                }
+                                dragOffset = 0f
+                            },
+                            onDragCancel = {
+                                dragOffset = 0f
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                controlsVisible = true
+                            }
+                        )
+                    }
             ) {
-                val sheetModifier = if (isLandscape) {
-                    Modifier
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                        .fillMaxWidth(0.55f)
-                } else {
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.75f)
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        PlayerView(context).apply {
+                            useController = false
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        }
+                    },
+                    update = { view ->
+                        view.player = player
+                        view.keepScreenOn = isPlaying
+                    }
+                )
+
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Camera ${selectedIndex + 1}",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = statusText,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    currentPreviewUrl?.let { url ->
+                        Text(
+                            text = url,
+                            color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
-                Surface(
-                    modifier = sheetModifier,
-                    tonalElevation = 6.dp
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(24.dp),
+                    enter = fadeIn(animationSpec = tween(durationMillis = 150)),
+                    exit = fadeOut(animationSpec = tween(durationMillis = 150))
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(24.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Camera settings",
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                            TextButton(onClick = { settingsVisible = false }) {
-                                Text("Close")
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = {
+                                controlsVisible = true
+                                if (isPlaying || currentPreviewUrl != null) {
+                                    stopPlayback("Stopped")
+                                } else {
+                                    connectToCamera(selectedIndex)
+                                }
                             }
+                        ) {
+                            Text(if (isPlaying || currentPreviewUrl != null) "Disconnect" else "Connect")
                         }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { exportLauncher.launch(EXPORT_FILE_NAME) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Export")
-                            }
-                            OutlinedButton(
-                                onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Import")
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            itemsIndexed(cameraSlots) { index, slot ->
-                                CameraSlotEditor(
-                                    index = index,
-                                    config = slot,
-                                    isSelected = index == selectedIndex,
-                                    onConfigChange = { updated -> cameraSlots[index] = updated },
-                                    onConnect = {
-                                        selectSlot(index, connect = true)
-                                        settingsVisible = false
-                                        controlsVisible = true
-                                    },
-                                    onClear = {
-                                        cameraSlots[index] = CameraConfig()
-                                        if (index == selectedIndex) {
-                                            stopPlayback("No camera selected")
-                                        }
-                                    }
-                                )
-                            }
+                        Button(onClick = { openSettings() }) {
+                            Text("Settings")
                         }
                     }
                 }
+            }
+        }
+    }
+
+@Composable
+private fun SettingsScreen(
+    slots: List<CameraConfig>,
+    selectedIndex: Int,
+    onSlotChange: (Int, CameraConfig) -> Unit,
+    onClearSlot: (Int) -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Camera settings",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    text = "Configure saved streams and import/export profiles.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextButton(onClick = onCancel) { Text("Cancel") }
+                Button(onClick = onSave) { Text("Save") }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = onExport,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Export")
+            }
+            OutlinedButton(
+                onClick = onImport,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Import")
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(bottom = 96.dp)
+        ) {
+            itemsIndexed(slots) { index, slot ->
+                CameraSlotEditor(
+                    index = index,
+                    config = slot,
+                    isSelected = index == selectedIndex,
+                    onConfigChange = { updated -> onSlotChange(index, updated) },
+                    onClear = { onClearSlot(index) }
+                )
             }
         }
     }
@@ -574,7 +586,6 @@ private fun CameraSlotEditor(
     config: CameraConfig,
     isSelected: Boolean,
     onConfigChange: (CameraConfig) -> Unit,
-    onConnect: () -> Unit,
     onClear: () -> Unit
 ) {
     Surface(
@@ -696,19 +707,10 @@ private fun CameraSlotEditor(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.End
             ) {
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Connect")
-                }
-                OutlinedButton(
-                    onClick = onClear,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Clear")
+                OutlinedButton(onClick = onClear) {
+                    Text("Clear slot")
                 }
             }
         }
