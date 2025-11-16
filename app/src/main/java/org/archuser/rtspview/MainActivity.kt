@@ -503,6 +503,7 @@ fun RtspViewerApp() {
             }
         }
     }
+}
 
 @Composable
 private fun SettingsScreen(
