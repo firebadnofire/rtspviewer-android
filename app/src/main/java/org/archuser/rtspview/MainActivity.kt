@@ -106,12 +106,12 @@ private const val PREFS_NAME = "camera_settings"
 private const val PREFS_KEY_SLOTS = "slots"
 private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
 
-private enum class RtspTransport(val title: String) {
+internal enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
 
-private data class CameraConfig(
+internal data class CameraConfig(
     val title: String = "",
     val username: String = "",
     val password: String = "",
