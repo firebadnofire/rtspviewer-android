@@ -6,16 +6,16 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -24,22 +24,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -74,17 +75,9 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
-import org.json.JSONArray
-import org.json.JSONException
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -101,24 +94,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private const val DEFAULT_CAMERA_SLUG = "/cam/realmonitor"
-private const val DEFAULT_PORT = "554"
-private const val DEFAULT_CHANNEL = "1"
-private const val DEFAULT_SUBTYPE = "0"
-private const val DEFAULT_LATENCY_MS = 100
-private const val SLOT_COUNT = 16
+internal const val DEFAULT_CAMERA_SLUG = "/cam/realmonitor"
+internal const val DEFAULT_PORT = "554"
+internal const val DEFAULT_CHANNEL = "1"
+internal const val DEFAULT_SUBTYPE = "0"
+internal const val DEFAULT_LATENCY_MS = 100
+internal const val SLOT_COUNT = 16
 private const val HIDE_CONTROLS_DELAY_MS = 5_000L
 private const val DRAG_THRESHOLD = 120f
 private const val PREFS_NAME = "camera_settings"
 private const val PREFS_KEY_SLOTS = "slots"
 private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
 
-private enum class RtspTransport(val title: String) {
+internal enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
 
-private data class CameraConfig(
+internal data class CameraConfig(
     val title: String = "",
     val username: String = "",
     val password: String = "",
@@ -205,10 +198,9 @@ private data class CameraConfig(
             .build()
     }
 
-    fun previewUrl(includePassword: Boolean = false): String =
-        toRtspUri(includePassword).toString()
 }
 
+@OptIn(ExperimentalAnimationApi::class)
 @UnstableApi
 @Composable
 fun RtspViewerApp() {
@@ -228,6 +220,9 @@ fun RtspViewerApp() {
     val cameraSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
+    val editingSlots = remember {
+        mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
+    }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
@@ -236,7 +231,10 @@ fun RtspViewerApp() {
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
-            coroutineScope.launch { exportCameraSettings(context, uri, cameraSlots) }
+            coroutineScope.launch {
+                val configs = if (settingsVisible) editingSlots else cameraSlots
+                exportCameraSettings(context, uri, configs)
+            }
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -244,7 +242,11 @@ fun RtspViewerApp() {
             coroutineScope.launch {
                 val imported = importCameraSettings(context, uri)
                 if (imported != null) {
-                    applyCameraSettings(cameraSlots, imported)
+                    if (settingsVisible) {
+                        applyCameraSettings(editingSlots, imported)
+                    } else {
+                        applyCameraSettings(cameraSlots, imported)
+                    }
                 }
             }
         }
@@ -353,186 +355,249 @@ fun RtspViewerApp() {
         }
     }
 
+    fun openSettings() {
+        applyCameraSettings(editingSlots, cameraSlots)
+        settingsVisible = true
+        controlsVisible = true
+    }
+
+    fun saveSettings() {
+        val wasPlaying = isPlaying || currentPreviewUrl != null
+        applyCameraSettings(cameraSlots, editingSlots)
+        if (wasPlaying) {
+            stopPlayback("Settings updated")
+        } else if (cameraSlots[selectedIndex].validationError() != null) {
+            stopPlayback("No camera selected")
+        }
+        settingsVisible = false
+    }
+
     LaunchedEffect(controlsVisible, settingsVisible) {
         if (controlsVisible && !settingsVisible) {
-            // When the settings drawer is hidden, fade controls back out after a brief pause.
+            // When the settings screen is hidden, fade controls back out after a brief pause.
             delay(HIDE_CONTROLS_DELAY_MS)
             controlsVisible = false
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(selectedIndex) {
-                detectDragGestures(
-                    onDragStart = { dragOffset = 0f },
-                    onDrag = { change, dragAmount ->
-                        dragOffset += dragAmount.x
-                        @Suppress("DEPRECATION")
-                        change.consumePositionChange()
-                    },
-                    onDragEnd = {
-                        when {
-                            dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
-                            dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
-                        }
-                        dragOffset = 0f
-                    },
-                    onDragCancel = {
-                        dragOffset = 0f
-                    }
-                )
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = {
-                        controlsVisible = true
-                    }
-                )
-            }
-    ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                PlayerView(context).apply {
-                    useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                }
-            },
-            update = { view ->
-                view.player = player
-                view.keepScreenOn = isPlaying
-            }
-        )
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "Camera ${selectedIndex + 1}",
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+    Crossfade(targetState = settingsVisible, label = "settings_screen") { showSettings ->
+        if (showSettings) {
+            SettingsScreen(
+                slots = editingSlots,
+                selectedIndex = selectedIndex,
+                onSlotChange = { index, updated -> editingSlots[index] = updated },
+                onClearSlot = { index -> editingSlots[index] = CameraConfig() },
+                onExport = { exportLauncher.launch(EXPORT_FILE_NAME) },
+                onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) },
+                onSave = { saveSettings() },
+                onCancel = { settingsVisible = false }
             )
-            Text(
-                text = statusText,
-                color = Color.White.copy(alpha = 0.9f),
-                style = MaterialTheme.typography.bodyMedium
-            )
-            currentPreviewUrl?.let { url ->
-                Text(
-                    text = url,
-                    color = Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
+        } else {
+            val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
 
-        AnimatedVisibility(
-            visible = controlsVisible || settingsVisible,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(24.dp),
-            enter = fadeIn(animationSpec = tween(durationMillis = 150)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 150))
-        ) {
-            Button(onClick = { settingsVisible = true; controlsVisible = true }) {
-                Text("Settings")
-            }
-        }
-
-        AnimatedVisibility(
-            visible = settingsVisible,
-            enter = fadeIn(animationSpec = tween(150)) + slideInHorizontally(initialOffsetX = { it / 2 }),
-            exit = fadeOut(animationSpec = tween(150)) + slideOutHorizontally(targetOffsetX = { it / 2 })
-        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
-                    .padding(start = 72.dp)
+                    .background(Color.Black)
+                    .pointerInput(selectedIndex) {
+                        detectDragGestures(
+                            onDragStart = { dragOffset = 0f },
+                            onDrag = { change, dragAmount ->
+                                dragOffset += dragAmount.x
+                                @Suppress("DEPRECATION")
+                                change.consumePositionChange()
+                            },
+                            onDragEnd = {
+                                when {
+                                    dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
+                                    dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                                }
+                                dragOffset = 0f
+                            },
+                            onDragCancel = {
+                                dragOffset = 0f
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                controlsVisible = true
+                            }
+                        )
+                    }
             ) {
-                Surface(
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        PlayerView(context).apply {
+                            useController = false
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        }
+                    },
+                    update = { view ->
+                        view.player = player
+                        view.keepScreenOn = isPlaying
+                    }
+                )
+
+                Column(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                        .fillMaxWidth(0.55f),
-                    tonalElevation = 6.dp
+                        .align(Alignment.TopStart)
+                        .padding(safeDrawingPadding)
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(24.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Camera settings",
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                            TextButton(onClick = { settingsVisible = false }) {
-                                Text("Close")
+                    Text(
+                        text = "Camera ${selectedIndex + 1}",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = statusText,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    currentPreviewUrl?.let { url ->
+                        Text(
+                            text = url,
+                            color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(safeDrawingPadding)
+                        .padding(24.dp),
+                    enter = fadeIn(animationSpec = tween(durationMillis = 150)),
+                    exit = fadeOut(animationSpec = tween(durationMillis = 150))
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = {
+                                controlsVisible = true
+                                if (isPlaying || currentPreviewUrl != null) {
+                                    stopPlayback("Stopped")
+                                } else {
+                                    connectToCamera(selectedIndex)
+                                }
                             }
+                        ) {
+                            Text(if (isPlaying || currentPreviewUrl != null) "Disconnect" else "Connect")
                         }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { exportLauncher.launch(EXPORT_FILE_NAME) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Export")
-                            }
-                            OutlinedButton(
-                                onClick = { importLauncher.launch(arrayOf("application/json", "text/*")) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Import")
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            itemsIndexed(cameraSlots) { index, slot ->
-                                CameraSlotEditor(
-                                    index = index,
-                                    config = slot,
-                                    isSelected = index == selectedIndex,
-                                    onConfigChange = { updated -> cameraSlots[index] = updated },
-                                    onConnect = {
-                                        selectSlot(index, connect = true)
-                                        settingsVisible = false
-                                        controlsVisible = true
-                                    },
-                                    onClear = {
-                                        cameraSlots[index] = CameraConfig()
-                                        if (index == selectedIndex) {
-                                            stopPlayback("No camera selected")
-                                        }
-                                    }
-                                )
-                            }
+                        Button(onClick = { openSettings() }) {
+                            Text("Settings")
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    slots: List<CameraConfig>,
+    selectedIndex: Int,
+    onSlotChange: (Int, CameraConfig) -> Unit,
+    onClearSlot: (Int) -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "Camera settings",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    text = "Configure saved streams and import/export profiles.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        bottomBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = onSave,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Save")
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onExport,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Export")
+                }
+                OutlinedButton(
+                    onClick = onImport,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Import")
+                }
+            }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(bottom = 32.dp)
+            ) {
+                itemsIndexed(slots) { index, slot ->
+                    CameraSlotEditor(
+                        index = index,
+                        config = slot,
+                        isSelected = index == selectedIndex,
+                        onConfigChange = { updated -> onSlotChange(index, updated) },
+                        onClear = { onClearSlot(index) }
+                    )
                 }
             }
         }
@@ -545,7 +610,6 @@ private fun CameraSlotEditor(
     config: CameraConfig,
     isSelected: Boolean,
     onConfigChange: (CameraConfig) -> Unit,
-    onConnect: () -> Unit,
     onClear: () -> Unit
 ) {
     Surface(
@@ -667,106 +731,14 @@ private fun CameraSlotEditor(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.End
             ) {
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Connect")
-                }
-                OutlinedButton(
-                    onClick = onClear,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Clear")
+                OutlinedButton(onClick = onClear) {
+                    Text("Clear slot")
                 }
             }
         }
     }
 }
 
-private fun serializeCameraSettings(configs: List<CameraConfig>): String {
-    val array = JSONArray()
-    configs.take(SLOT_COUNT).forEach { config ->
-        array.put(
-            JSONObject().apply {
-                put("title", config.title)
-                put("username", config.username)
-                put("password", config.password)
-                put("host", config.host)
-                put("port", config.port)
-                put("slug", config.slug)
-                put("channel", config.channel)
-                put("subtype", config.subtype)
-                put("transport", config.transport.name)
-                put("latencyMs", config.latencyMs)
-            }
-        )
-    }
-    return array.toString()
-}
-
-private fun parseCameraSettings(json: String?): List<CameraConfig>? {
-    if (json.isNullOrBlank()) return null
-    return try {
-        val array = JSONArray(json)
-        buildList {
-            for (index in 0 until array.length()) {
-                val obj = array.optJSONObject(index) ?: continue
-                add(
-                    CameraConfig(
-                        title = obj.optString("title"),
-                        username = obj.optString("username"),
-                        password = obj.optString("password"),
-                        host = obj.optString("host"),
-                        port = obj.optString("port", DEFAULT_PORT),
-                        slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
-                        channel = obj.optString("channel", DEFAULT_CHANNEL),
-                        subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
-                        transport = obj.optString("transport").let { stored ->
-                            RtspTransport.entries.firstOrNull { it.name == stored } ?: RtspTransport.TCP
-                        },
-                        latencyMs = obj.optInt("latencyMs", DEFAULT_LATENCY_MS)
-                    )
-                )
-            }
-        }
-    } catch (_: JSONException) {
-        null
-    }
-}
-
-private fun applyCameraSettings(target: MutableList<CameraConfig>, configs: List<CameraConfig>) {
-    configs.take(SLOT_COUNT).forEachIndexed { index, config ->
-        if (index < target.size) {
-            target[index] = config
-        }
-    }
-    for (index in configs.size until SLOT_COUNT) {
-        if (index < target.size) {
-            target[index] = CameraConfig()
-        }
-    }
-}
-
-private suspend fun exportCameraSettings(context: Context, uri: Uri, configs: List<CameraConfig>) {
-    withContext(Dispatchers.IO) {
-        context.contentResolver.openOutputStream(uri)?.use { stream ->
-            OutputStreamWriter(stream).use { writer ->
-                writer.write(serializeCameraSettings(configs))
-            }
-        }
-    }
-}
-
-private suspend fun importCameraSettings(context: Context, uri: Uri): List<CameraConfig>? {
-    val json = withContext(Dispatchers.IO) {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BufferedReader(InputStreamReader(stream)).use { reader ->
-                reader.readText()
-            }
-        }
-    }
-    return parseCameraSettings(json)
-}
+// Storage helpers moved to CameraSettingsStorage.kt
