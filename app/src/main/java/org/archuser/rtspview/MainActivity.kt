@@ -60,7 +60,6 @@ import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -113,6 +112,7 @@ internal enum class RtspTransport(val title: String) {
 
 internal data class CameraConfig(
     val title: String = "",
+    val fullUrl: String = "",
     val username: String = "",
     val password: String = "",
     val host: String = "",
@@ -125,6 +125,7 @@ internal data class CameraConfig(
 ) {
     fun normalized(): CameraConfig = copy(
         title = title.trim(),
+        fullUrl = fullUrl.trim(),
         username = username.trim(),
         password = password.trim(),
         host = host.trim(),
@@ -136,15 +137,33 @@ internal data class CameraConfig(
     )
 
     fun validationError(): String? {
-        if (host.isBlank()) return "Host/IP address is required"
+        if (fullUrl.isNotBlank() && !fullUrl.lowercase().startsWith("rtsp://")) {
+            return "RTSP URL must start with rtsp://"
+        }
+        if (fullUrl.isBlank() && host.isBlank()) return "RTSP URL is required"
         return null
     }
 
     fun displayName(): String =
-        title.ifBlank { host.ifBlank { "RTSP Stream" } }
+        title.ifBlank {
+            when {
+                fullUrl.isNotBlank() -> fullUrl
+                host.isNotBlank() -> host
+                else -> "RTSP Stream"
+            }
+        }
 
     fun toRtspUri(includePassword: Boolean = false): Uri {
         val normalized = normalized()
+        if (normalized.fullUrl.isNotBlank()) {
+            val parsed = Uri.parse(normalized.fullUrl)
+            val sanitizedAuthority = parsed.encodedAuthority?.let { authority ->
+                if (includePassword) authority else sanitizeAuthority(authority)
+            }
+            return parsed.buildUpon()
+                .apply { sanitizedAuthority?.let { encodedAuthority(it) } }
+                .build()
+        }
         val portString = normalized.port.trim().ifEmpty { DEFAULT_PORT }
         val sanitizedPort = portString.toIntOrNull()?.toString() ?: DEFAULT_PORT
         val credential = buildString {
@@ -198,6 +217,16 @@ internal data class CameraConfig(
             .build()
     }
 
+}
+
+private fun sanitizeAuthority(authority: String): String {
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return authority
+    val credential = authority.substring(0, atIndex)
+    val hostPart = authority.substring(atIndex + 1)
+    val colonIndex = credential.indexOf(':')
+    val sanitizedCredential = if (colonIndex >= 0) credential.substring(0, colonIndex) else credential
+    return if (sanitizedCredential.isEmpty()) hostPart else "$sanitizedCredential@$hostPart"
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -640,64 +669,13 @@ private fun CameraSlotEditor(
             )
 
             OutlinedTextField(
-                value = config.host,
-                onValueChange = { onConfigChange(config.copy(host = it)) },
+                value = config.fullUrl,
+                onValueChange = { onConfigChange(config.copy(fullUrl = it)) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Host / IP") },
-                singleLine = true
+                label = { Text("RTSP URL") },
+                singleLine = true,
+                placeholder = { Text("rtsp://user:pass@host:port/path") }
             )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = config.port,
-                    onValueChange = { onConfigChange(config.copy(port = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Port") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = config.slug,
-                    onValueChange = { onConfigChange(config.copy(slug = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Path") },
-                    singleLine = true
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = config.channel,
-                    onValueChange = { onConfigChange(config.copy(channel = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Channel") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = config.subtype,
-                    onValueChange = { onConfigChange(config.copy(subtype = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Subtype") },
-                    singleLine = true
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = config.username,
-                    onValueChange = { onConfigChange(config.copy(username = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Username") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = config.password,
-                    onValueChange = { onConfigChange(config.copy(password = it)) },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Password") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true
-                )
-            }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(

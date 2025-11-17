@@ -17,6 +17,7 @@ internal fun serializeCameraSettings(configs: List<CameraConfig>): String {
         array.put(
             JSONObject().apply {
                 put("title", config.title)
+                put("url", config.fullUrl)
                 put("username", config.username)
                 put("password", config.password)
                 put("host", config.host)
@@ -39,22 +40,27 @@ internal fun parseCameraSettings(json: String?): List<CameraConfig>? {
         buildList {
             for (index in 0 until array.length()) {
                 val obj = array.optJSONObject(index) ?: continue
-                add(
-                    CameraConfig(
-                        title = obj.optString("title"),
-                        username = obj.optString("username"),
-                        password = obj.optString("password"),
-                        host = obj.optString("host"),
-                        port = obj.optString("port", DEFAULT_PORT),
-                        slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
-                        channel = obj.optString("channel", DEFAULT_CHANNEL),
-                        subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
-                        transport = obj.optString("transport").let { stored ->
-                            RtspTransport.entries.firstOrNull { it.name == stored } ?: RtspTransport.TCP
-                        },
-                        latencyMs = obj.optInt("latencyMs", DEFAULT_LATENCY_MS)
-                    )
+                val config = CameraConfig(
+                    title = obj.optString("title"),
+                    fullUrl = obj.optString("url"),
+                    username = obj.optString("username"),
+                    password = obj.optString("password"),
+                    host = obj.optString("host"),
+                    port = obj.optString("port", DEFAULT_PORT),
+                    slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
+                    channel = obj.optString("channel", DEFAULT_CHANNEL),
+                    subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
+                    transport = obj.optString("transport").let { stored ->
+                        RtspTransport.entries.firstOrNull { it.name == stored } ?: RtspTransport.TCP
+                    },
+                    latencyMs = obj.optInt("latencyMs", DEFAULT_LATENCY_MS)
                 )
+                val resolved = if (config.fullUrl.isBlank() && config.host.isNotBlank()) {
+                    config.copy(fullUrl = config.toRtspUri(includePassword = true).toString())
+                } else {
+                    config
+                }
+                add(resolved)
             }
         }
     } catch (_: JSONException) {
