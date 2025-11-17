@@ -8,7 +8,7 @@ espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.6"
 activityCompose = "1.9.3"
 composeBom = "2024.09.00"
-media3 = "1.4.0"
+media3 = "1.4.1"
 orgJson = "20240303"
 
 [libraries]
