@@ -5,6 +5,8 @@ package org.archuser.rtspview
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -63,24 +65,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
-import androidx.media3.ui.PlayerView
-import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-@UnstableApi
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -230,22 +226,22 @@ private fun sanitizeAuthority(authority: String): String {
 }
 
 @OptIn(ExperimentalAnimationApi::class)
-@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            playWhenReady = true
-            repeatMode = Player.REPEAT_MODE_OFF
-        }
+    val libVlc = remember {
+        LibVLC(context, listOf("--clock-jitter=0", "--clock-synchro=0"))
     }
+    val mediaPlayer = remember { MediaPlayer(libVlc) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var statusText by remember { mutableStateOf("No camera selected") }
     var isPlaying by remember { mutableStateOf(false) }
     var currentPreviewUrl by remember { mutableStateOf<String?>(null) }
+    var suppressStopStatus by remember { mutableStateOf(false) }
+    var attachedVideoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     val cameraSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
@@ -300,37 +296,65 @@ fun RtspViewerApp() {
             }
     }
 
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                statusText = when (playbackState) {
-                    Player.STATE_IDLE -> if (currentPreviewUrl == null) "No camera selected" else "Stopped"
-                    Player.STATE_BUFFERING -> "Buffering…"
-                    Player.STATE_READY -> if (player.playWhenReady) "Playing" else "Paused"
-                    Player.STATE_ENDED -> "Stream ended"
-                    else -> statusText
+    DisposableEffect(mediaPlayer) {
+        val listener = MediaPlayer.EventListener { event ->
+            mainHandler.post {
+                when (event.type) {
+                    MediaPlayer.Event.Playing -> {
+                        suppressStopStatus = false
+                        isPlaying = true
+                        statusText = "Playing"
+                    }
+
+                    MediaPlayer.Event.Paused -> {
+                        suppressStopStatus = false
+                        isPlaying = false
+                        statusText = "Paused"
+                    }
+
+                    MediaPlayer.Event.Buffering -> {
+                        statusText = "Buffering…"
+                    }
+
+                    MediaPlayer.Event.EndReached -> {
+                        suppressStopStatus = false
+                        isPlaying = false
+                        statusText = "Stream ended"
+                    }
+
+                    MediaPlayer.Event.Stopped -> {
+                        if (suppressStopStatus) {
+                            suppressStopStatus = false
+                        } else {
+                            isPlaying = false
+                            statusText = if (currentPreviewUrl == null) "No camera selected" else "Stopped"
+                        }
+                    }
+
+                    MediaPlayer.Event.EncounteredError -> {
+                        suppressStopStatus = false
+                        isPlaying = false
+                        currentPreviewUrl = null
+                        statusText = "Error: Playback failed"
+                    }
                 }
             }
-
-            override fun onIsPlayingChanged(isPlayingNow: Boolean) {
-                isPlaying = isPlayingNow
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                val detail = error.message ?: "Unknown"
-                statusText = "Error: ${error.errorCodeName} ($detail)"
-            }
         }
-        player.addListener(listener)
+        mediaPlayer.setEventListener(listener)
         onDispose {
-            player.removeListener(listener)
-            player.release()
+            mediaPlayer.setEventListener(null)
+            mediaPlayer.stop()
+            mediaPlayer.detachViews()
+            attachedVideoLayout = null
+            mediaPlayer.release()
+            libVlc.release()
+            mainHandler.removeCallbacksAndMessages(null)
         }
     }
 
     fun stopPlayback(message: String = "Stopped") {
-        player.stop()
-        player.clearMediaItems()
+        suppressStopStatus = true
+        mediaPlayer.stop()
         currentPreviewUrl = null
         isPlaying = false
         statusText = message
@@ -346,33 +370,30 @@ fun RtspViewerApp() {
         }
 
         val playbackUri = normalized.toRtspUri(includePassword = true)
-        val mediaItem = MediaItem.Builder()
-            .setUri(playbackUri)
-            .setMimeType(MimeTypes.APPLICATION_RTSP)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(normalized.displayName())
-                    .build()
-            )
-            .setLiveConfiguration(
-                MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(normalized.latencyMs.toLong())
-                    .build()
-            )
-            .build()
-
         val timeoutMs = max(5_000, normalized.latencyMs * 10).toLong()
-        val mediaSource = RtspMediaSource.Factory()
-            .setForceUseRtpTcp(normalized.transport == RtspTransport.TCP)
-            .setTimeoutMs(timeoutMs)
-            .createMediaSource(mediaItem)
+        val timeoutSeconds = (timeoutMs / 1_000L).coerceAtLeast(5)
+        val networkCaching = normalized.latencyMs.coerceIn(0, 2_000)
 
+        val media = Media(libVlc, playbackUri).apply {
+            setHWDecoderEnabled(true, false)
+            addOption(":network-caching=$networkCaching")
+            addOption(":rtsp-timeout=$timeoutSeconds")
+            addOption(":clock-jitter=0")
+            addOption(":clock-synchro=0")
+            if (normalized.transport == RtspTransport.TCP) {
+                addOption(":rtsp-tcp")
+            } else {
+                addOption(":rtsp-udp")
+            }
+        }
+
+        suppressStopStatus = true
         statusText = "Connecting…"
         currentPreviewUrl = normalized.toRtspUri(includePassword = false).toString()
-        player.stop()
-        player.setMediaSource(mediaSource, /* resetPosition= */ true)
-        player.prepare()
-        player.play()
+        mediaPlayer.stop()
+        mediaPlayer.media = media
+        media.release()
+        mediaPlayer.play()
     }
 
     fun selectSlot(newIndex: Int, connect: Boolean) {
@@ -459,13 +480,18 @@ fun RtspViewerApp() {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
-                        PlayerView(context).apply {
-                            useController = false
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        VLCVideoLayout(context).apply {
+                            attachedVideoLayout?.let { mediaPlayer.detachViews() }
+                            attachedVideoLayout = this
+                            mediaPlayer.attachViews(this, null, false, false)
                         }
                     },
                     update = { view ->
-                        view.player = player
+                        if (attachedVideoLayout !== view) {
+                            mediaPlayer.detachViews()
+                            attachedVideoLayout = view
+                            mediaPlayer.attachViews(view, null, false, false)
+                        }
                         view.keepScreenOn = isPlaying
                     }
                 )
