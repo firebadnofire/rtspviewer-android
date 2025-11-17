@@ -14,18 +14,26 @@ import java.io.OutputStreamWriter
 internal fun serializeCameraSettings(configs: List<CameraConfig>): String {
     val array = JSONArray()
     configs.take(SLOT_COUNT).forEach { config ->
+        val normalized = config.normalized()
+        val sanitizedPort = normalized.port.toIntOrNull() ?: DEFAULT_PORT.toInt()
         array.put(
             JSONObject().apply {
                 put("title", config.title)
                 put("username", config.username)
+                put("user", config.username)
                 put("password", config.password)
+                put("pass", config.password)
                 put("host", config.host)
-                put("port", config.port)
+                put("ip", config.host)
+                put("portString", config.port)
+                put("port", sanitizedPort)
                 put("slug", config.slug)
                 put("channel", config.channel)
                 put("subtype", config.subtype)
-                put("transport", config.transport.name)
+                val transportValue = normalized.transport.name.lowercase()
+                put("transport", transportValue)
                 put("latencyMs", config.latencyMs)
+                put("latency", config.latencyMs)
             }
         )
     }
@@ -42,17 +50,20 @@ internal fun parseCameraSettings(json: String?): List<CameraConfig>? {
                 add(
                     CameraConfig(
                         title = obj.optString("title"),
-                        username = obj.optString("username"),
-                        password = obj.optString("password"),
-                        host = obj.optString("host"),
-                        port = obj.optString("port", DEFAULT_PORT),
+                        username = obj.optStringCompat("username", "user"),
+                        password = obj.optStringCompat("password", "pass"),
+                        host = obj.optStringCompat("host", "ip"),
+                        port = obj.optStringCompat("portString", "port", fallback = DEFAULT_PORT),
                         slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
                         channel = obj.optString("channel", DEFAULT_CHANNEL),
                         subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
                         transport = obj.optString("transport").let { stored ->
-                            RtspTransport.entries.firstOrNull { it.name == stored } ?: RtspTransport.TCP
+                            RtspTransport.entries.firstOrNull {
+                                it.name.equals(stored, ignoreCase = true) ||
+                                    it.title.equals(stored, ignoreCase = true)
+                            } ?: RtspTransport.TCP
                         },
-                        latencyMs = obj.optInt("latencyMs", DEFAULT_LATENCY_MS)
+                        latencyMs = obj.optIntCompat(DEFAULT_LATENCY_MS, "latencyMs", "latency")
                     )
                 )
             }
@@ -60,6 +71,35 @@ internal fun parseCameraSettings(json: String?): List<CameraConfig>? {
     } catch (_: JSONException) {
         null
     }
+}
+
+private fun JSONObject.optStringCompat(vararg keys: String, fallback: String = ""): String {
+    keys.forEach { key ->
+        if (has(key)) {
+            val value = opt(key)
+            if (value != null && value != JSONObject.NULL) {
+                return when (value) {
+                    is String -> value
+                    is Number -> value.toString()
+                    else -> fallback
+                }
+            }
+        }
+    }
+    return fallback
+}
+
+private fun JSONObject.optIntCompat(default: Int, vararg keys: String): Int {
+    keys.forEach { key ->
+        if (has(key)) {
+            val value = opt(key)
+            when (value) {
+                is Number -> return value.toInt()
+                is String -> value.toIntOrNull()?.let { return it }
+            }
+        }
+    }
+    return default
 }
 
 internal fun applyCameraSettings(target: MutableList<CameraConfig>, configs: List<CameraConfig>) {
