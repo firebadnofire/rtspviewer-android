@@ -30,9 +30,9 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +60,9 @@ import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -704,10 +707,94 @@ private fun CameraSlotEditor(
                 value = config.fullUrl,
                 onValueChange = { onConfigChange(config.copy(fullUrl = it)) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("RTSP URL") },
+                label = { Text("Full RTSP URL (optional)") },
                 singleLine = true,
-                placeholder = { Text("rtsp://user:pass@host:port/path") }
+                placeholder = { Text("rtsp://user:pass@host:port/path") },
+                supportingText = {
+                    Text(
+                        text = "Leave blank to build a URL using the host, credentials, and path fields below.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             )
+
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Credentials",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = config.username,
+                        onValueChange = { onConfigChange(config.copy(username = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Username") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = config.password,
+                        onValueChange = { onConfigChange(config.copy(password = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Host & path",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                OutlinedTextField(
+                    value = config.host,
+                    onValueChange = { onConfigChange(config.copy(host = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Hostname or IP") },
+                    singleLine = true,
+                    placeholder = { Text("10.0.0.5") }
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = config.port,
+                        onValueChange = { onConfigChange(config.copy(port = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Port") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = config.slug,
+                        onValueChange = { onConfigChange(config.copy(slug = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Path / slug") },
+                        singleLine = true,
+                        placeholder = { Text("/cam/realmonitor") }
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = config.channel,
+                        onValueChange = { onConfigChange(config.copy(channel = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Channel") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    OutlinedTextField(
+                        value = config.subtype,
+                        onValueChange = { onConfigChange(config.copy(subtype = it)) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Subtype") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
