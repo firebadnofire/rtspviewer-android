@@ -69,6 +69,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
@@ -207,8 +208,12 @@ fun RtspViewerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    val renderersFactory = remember {
+        DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+    }
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
+        ExoPlayer.Builder(context, renderersFactory).build().apply {
             playWhenReady = true
             repeatMode = Player.REPEAT_MODE_OFF
         }
