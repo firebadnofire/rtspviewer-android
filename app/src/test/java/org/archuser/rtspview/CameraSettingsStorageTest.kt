@@ -33,13 +33,10 @@ class CameraSettingsStorageTest {
         assertEquals(1, parsed.size)
         val config = parsed.first()
         assertEquals("Porch", config.title)
-        assertEquals("admin", config.username)
-        assertEquals("secret", config.password)
-        assertEquals("192.168.0.50", config.host)
-        assertEquals("8554", config.port)
-        assertEquals("/cam/realmonitor", config.slug)
-        assertEquals("2", config.channel)
-        assertEquals("1", config.subtype)
+        assertEquals(
+            "rtsp://admin:secret@192.168.0.50:8554/cam/realmonitor?channel=2&subtype=1",
+            config.rtspUrl
+        )
         assertEquals(RtspTransport.UDP, config.transport)
         assertEquals(250, config.latencyMs)
     }
@@ -48,13 +45,7 @@ class CameraSettingsStorageTest {
     fun serializeCameraSettings_includesLegacyAliases() {
         val config = CameraConfig(
             title = "Garage",
-            username = "viewer",
-            password = "hunter2",
-            host = "10.0.0.10",
-            port = "8555",
-            slug = "/stream",
-            channel = "1",
-            subtype = "0",
+            rtspUrl = "rtsp://viewer:hunter2@10.0.0.10:8555/stream?channel=1&subtype=0",
             transport = RtspTransport.TCP,
             latencyMs = 125
         )
@@ -64,6 +55,8 @@ class CameraSettingsStorageTest {
         assertEquals(1, array.length())
         val obj = array.getJSONObject(0)
 
+        assertEquals("rtsp://viewer:hunter2@10.0.0.10:8555/stream?channel=1&subtype=0", obj.getString("url"))
+        assertEquals("rtsp://viewer:hunter2@10.0.0.10:8555/stream?channel=1&subtype=0", obj.getString("rtspUrl"))
         assertEquals("viewer", obj.getString("username"))
         assertEquals("viewer", obj.getString("user"))
         assertEquals("hunter2", obj.getString("password"))
@@ -72,6 +65,9 @@ class CameraSettingsStorageTest {
         assertEquals("10.0.0.10", obj.getString("ip"))
         assertEquals("8555", obj.getString("portString"))
         assertEquals(8555, obj.getInt("port"))
+        assertEquals("/stream", obj.getString("slug"))
+        assertEquals("1", obj.getString("channel"))
+        assertEquals("0", obj.getString("subtype"))
         assertEquals(125, obj.getInt("latencyMs"))
         assertEquals(125, obj.getInt("latency"))
         assertTrue(obj.getString("transport").equals("tcp", ignoreCase = true))

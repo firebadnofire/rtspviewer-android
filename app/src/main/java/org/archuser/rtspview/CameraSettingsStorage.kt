@@ -15,21 +15,33 @@ internal fun serializeCameraSettings(configs: List<CameraConfig>): String {
     val array = JSONArray()
     configs.take(SLOT_COUNT).forEach { config ->
         val normalized = config.normalized()
-        val sanitizedPort = normalized.port.toIntOrNull() ?: DEFAULT_PORT.toInt()
+        val normalizedUrl = normalized.normalizedRtspUrl()
+        val components = normalizedUrl.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?.let { uri -> uri.toLegacyComponents() }
         array.put(
             JSONObject().apply {
                 put("title", config.title)
-                put("username", config.username)
-                put("user", config.username)
-                put("password", config.password)
-                put("pass", config.password)
-                put("host", config.host)
-                put("ip", config.host)
-                put("portString", config.port)
-                put("port", sanitizedPort)
-                put("slug", config.slug)
-                put("channel", config.channel)
-                put("subtype", config.subtype)
+                put("url", normalizedUrl)
+                put("rtspUrl", normalizedUrl)
+                val username = components?.username.orEmpty()
+                val password = components?.password.orEmpty()
+                val host = components?.host.orEmpty()
+                val portString = components?.port ?: DEFAULT_PORT
+                val slug = components?.slug ?: DEFAULT_CAMERA_SLUG
+                val channel = components?.channel.orEmpty()
+                val subtype = components?.subtype.orEmpty()
+                put("username", username)
+                put("user", username)
+                put("password", password)
+                put("pass", password)
+                put("host", host)
+                put("ip", host)
+                put("portString", portString)
+                put("port", portString.toIntOrNull() ?: DEFAULT_PORT.toInt())
+                put("slug", slug)
+                put("channel", channel)
+                put("subtype", subtype)
                 val transportValue = normalized.transport.name.lowercase()
                 put("transport", transportValue)
                 put("latencyMs", config.latencyMs)
@@ -50,13 +62,17 @@ internal fun parseCameraSettings(json: String?): List<CameraConfig>? {
                 add(
                     CameraConfig(
                         title = obj.optString("title"),
-                        username = obj.optStringCompat("username", "user"),
-                        password = obj.optStringCompat("password", "pass"),
-                        host = obj.optStringCompat("host", "ip"),
-                        port = obj.optStringCompat("portString", "port", fallback = DEFAULT_PORT),
-                        slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
-                        channel = obj.optString("channel", DEFAULT_CHANNEL),
-                        subtype = obj.optString("subtype", DEFAULT_SUBTYPE),
+                        rtspUrl = obj.optStringCompat("url", "rtspUrl").ifBlank {
+                            buildRtspUrlFromLegacyFields(
+                                username = obj.optStringCompat("username", "user"),
+                                password = obj.optStringCompat("password", "pass"),
+                                host = obj.optStringCompat("host", "ip"),
+                                port = obj.optStringCompat("portString", "port", fallback = DEFAULT_PORT),
+                                slug = obj.optString("slug", DEFAULT_CAMERA_SLUG),
+                                channel = obj.optString("channel", DEFAULT_CHANNEL),
+                                subtype = obj.optString("subtype", DEFAULT_SUBTYPE)
+                            )
+                        },
                         transport = obj.optString("transport").let { stored ->
                             RtspTransport.entries.firstOrNull {
                                 it.name.equals(stored, ignoreCase = true) ||
@@ -71,6 +87,117 @@ internal fun parseCameraSettings(json: String?): List<CameraConfig>? {
     } catch (_: JSONException) {
         null
     }
+}
+
+private data class LegacyRtspComponents(
+    val username: String,
+    val password: String,
+    val host: String,
+    val port: String,
+    val slug: String,
+    val channel: String,
+    val subtype: String
+)
+
+private fun Uri.toLegacyComponents(): LegacyRtspComponents {
+    val authority = encodedAuthority.orEmpty()
+    val atIndex = authority.lastIndexOf('@')
+    val userInfo = if (atIndex != -1) authority.substring(0, atIndex) else ""
+    val (username, password) = decodeUserInfo(userInfo)
+    val hostValue = host.orEmpty()
+    val portValue = if (port != -1) port.toString() else DEFAULT_PORT
+    val slugValue = path?.takeIf { it.isNotEmpty() } ?: DEFAULT_CAMERA_SLUG
+    val channelValue = getQueryParameter("channel") ?: ""
+    val subtypeValue = getQueryParameter("subtype") ?: ""
+    return LegacyRtspComponents(
+        username = username,
+        password = password,
+        host = hostValue,
+        port = portValue,
+        slug = slugValue,
+        channel = channelValue,
+        subtype = subtypeValue
+    )
+}
+
+private fun decodeUserInfo(userInfo: String): Pair<String, String> {
+    if (userInfo.isEmpty()) return "" to ""
+    val colonIndex = userInfo.indexOf(':')
+    return if (colonIndex == -1) {
+        Uri.decode(userInfo) to ""
+    } else {
+        val username = Uri.decode(userInfo.substring(0, colonIndex))
+        val password = Uri.decode(userInfo.substring(colonIndex + 1))
+        username to password
+    }
+}
+
+private fun buildRtspUrlFromLegacyFields(
+    username: String,
+    password: String,
+    host: String,
+    port: String,
+    slug: String,
+    channel: String,
+    subtype: String
+): String {
+    if (host.isBlank()) return ""
+    val sanitizedPort = port.trim().ifEmpty { DEFAULT_PORT }
+    val normalizedPort = sanitizedPort.toIntOrNull()?.toString() ?: DEFAULT_PORT
+    val credential = buildString {
+        val trimmedUser = username.trim()
+        if (trimmedUser.isNotEmpty()) {
+            append(Uri.encode(trimmedUser))
+            val trimmedPassword = password.trim()
+            if (trimmedPassword.isNotEmpty()) {
+                append(":")
+                append(Uri.encode(trimmedPassword))
+            }
+            append("@")
+        }
+    }
+    val normalizedHost = host.trim()
+    val authorityHost = if (":" in normalizedHost && !normalizedHost.startsWith("[")) {
+        "[$normalizedHost]"
+    } else {
+        normalizedHost
+    }
+    val authority = buildString {
+        append(credential)
+        append(authorityHost)
+        if (normalizedPort.isNotEmpty()) {
+            append(":")
+            append(normalizedPort)
+        }
+    }
+    val trimmedSlug = slug.trim()
+    val slugUri = if (trimmedSlug.isNotEmpty()) {
+        val normalizedSlug = if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"
+        Uri.parse("rtsp://placeholder$normalizedSlug")
+    } else {
+        null
+    }
+    val existingQueryParams = slugUri?.queryParameterNames.orEmpty()
+
+    val builder = Uri.Builder()
+        .scheme("rtsp")
+        .encodedAuthority(authority)
+        .apply {
+            slugUri?.path?.takeIf { it.isNotEmpty() }?.let { encodedPath(it) }
+            slugUri?.queryParameterNames?.forEach { name ->
+                slugUri.getQueryParameters(name).forEach { value ->
+                    appendQueryParameter(name, value)
+                }
+            }
+            if (channel.isNotBlank() && "channel" !in existingQueryParams) {
+                appendQueryParameter("channel", channel)
+            }
+            if (subtype.isNotBlank() && "subtype" !in existingQueryParams) {
+                appendQueryParameter("subtype", subtype)
+            }
+        }
+
+    return builder.build().toString()
 }
 
 private fun JSONObject.optStringCompat(vararg keys: String, fallback: String = ""): String {
