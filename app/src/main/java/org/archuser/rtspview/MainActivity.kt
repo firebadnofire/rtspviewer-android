@@ -2,9 +2,17 @@
 
 package org.archuser.rtspview
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,8 +31,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -66,24 +75,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
-import androidx.media3.ui.PlayerView
-import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
-import kotlin.math.max
 import kotlin.math.roundToInt
 
-@UnstableApi
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -233,22 +234,16 @@ private fun sanitizeAuthority(authority: String): String {
 }
 
 @OptIn(ExperimentalAnimationApi::class)
-@UnstableApi
 @Composable
 fun RtspViewerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val sharedPreferences = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            playWhenReady = true
-            repeatMode = Player.REPEAT_MODE_OFF
-        }
-    }
+    val playbackController = remember { RtspMediaPlayerController(context) }
+    val statusText by playbackController.statusText.collectAsState()
+    val isPlaying by playbackController.isPlaying.collectAsState()
+    val currentPreviewUrl by playbackController.currentPreviewUrl.collectAsState()
 
-    var statusText by remember { mutableStateOf("No camera selected") }
-    var isPlaying by remember { mutableStateOf(false) }
-    var currentPreviewUrl by remember { mutableStateOf<String?>(null) }
     val cameraSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
@@ -260,7 +255,12 @@ fun RtspViewerApp() {
     var settingsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
-    var pendingIdleSuppressions by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(playbackController) {
+        onDispose { playbackController.release() }
+    }
+
+    KeepScreenOnEffect(isPlaying)
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -304,67 +304,8 @@ fun RtspViewerApp() {
             }
     }
 
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                when (playbackState) {
-                    Player.STATE_IDLE -> {
-                        if (pendingIdleSuppressions > 0) {
-                            pendingIdleSuppressions -= 1
-                            return
-                        }
-                        statusText = if (currentPreviewUrl == null) "No camera selected" else "Stopped"
-                        isPlaying = false
-                    }
-
-                    Player.STATE_BUFFERING -> statusText = "Buffering…"
-
-                    Player.STATE_READY -> {
-                        statusText = if (player.playWhenReady) "Playing" else "Paused"
-                        isPlaying = player.playWhenReady
-                    }
-
-                    Player.STATE_ENDED -> {
-                        statusText = "Stream ended"
-                        isPlaying = false
-                        currentPreviewUrl = null
-                    }
-
-                    else -> Unit
-                }
-            }
-
-            override fun onIsPlayingChanged(isPlayingNow: Boolean) {
-                isPlaying = isPlayingNow
-                if (player.playbackState == Player.STATE_READY) {
-                    statusText = if (isPlayingNow) "Playing" else "Paused"
-                }
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                pendingIdleSuppressions = 0
-                isPlaying = false
-                currentPreviewUrl = null
-                val detail = error.message ?: "Unknown"
-                statusText = "Error: ${error.errorCodeName} ($detail)"
-            }
-        }
-        player.addListener(listener)
-        onDispose {
-            player.removeListener(listener)
-            player.release()
-        }
-    }
-
     fun stopPlayback(message: String = "Stopped") {
-        if (player.playbackState != Player.STATE_IDLE) {
-            pendingIdleSuppressions += 1
-        }
-        player.stop()
-        player.clearMediaItems()
-        currentPreviewUrl = null
-        isPlaying = false
-        statusText = message
+        playbackController.stop(message)
     }
 
     fun connectToCamera(slotIndex: Int) {
@@ -375,39 +316,7 @@ fun RtspViewerApp() {
             stopPlayback(error)
             return
         }
-
-        val playbackUri = normalized.toRtspUri(includePassword = true)
-        val mediaItem = MediaItem.Builder()
-            .setUri(playbackUri)
-            .setMimeType(MimeTypes.APPLICATION_RTSP)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(normalized.displayName())
-                    .build()
-            )
-            .setLiveConfiguration(
-                MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(normalized.latencyMs.toLong())
-                    .build()
-            )
-            .build()
-
-        val timeoutMs = max(5_000, normalized.latencyMs * 10).toLong()
-        val mediaSource = RtspMediaSource.Factory()
-            .setForceUseRtpTcp(normalized.transport == RtspTransport.TCP)
-            .setTimeoutMs(timeoutMs)
-            .createMediaSource(mediaItem)
-
-        if (player.playbackState != Player.STATE_IDLE) {
-            pendingIdleSuppressions += 1
-        }
-        player.stop()
-        player.clearMediaItems()
-        statusText = "Connecting…"
-        currentPreviewUrl = normalized.toRtspUri(includePassword = false).toString()
-        player.setMediaSource(mediaSource, /* resetPosition= */ true)
-        player.prepare()
-        player.play()
+        playbackController.play(normalized)
     }
 
     fun selectSlot(newIndex: Int, connect: Boolean) {
@@ -494,13 +403,27 @@ fun RtspViewerApp() {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
-                        PlayerView(context).apply {
-                            useController = false
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        SurfaceView(context).apply {
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) {
+                                    playbackController.attachSurface(holder)
+                                }
+
+                                override fun surfaceChanged(
+                                    holder: SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int
+                                ) = Unit
+
+                                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                    playbackController.detachSurface(holder)
+                                }
+                            })
                         }
                     },
                     update = { view ->
-                        view.player = player
                         view.keepScreenOn = isPlaying
                     }
                 )
@@ -562,6 +485,152 @@ fun RtspViewerApp() {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun KeepScreenOnEffect(shouldKeepScreenOn: Boolean) {
+    val context = LocalContext.current
+    DisposableEffect(shouldKeepScreenOn) {
+        val window = context.findActivity()?.window
+        if (shouldKeepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private class RtspMediaPlayerController(private val context: Context) {
+    private val _statusText = MutableStateFlow("No camera selected")
+    val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+    private val _isPlaying = MutableStateFlow(false)
+    val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    private val _currentPreviewUrl = MutableStateFlow<String?>(null)
+    val currentPreviewUrl: StateFlow<String?> = _currentPreviewUrl.asStateFlow()
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var surfaceHolder: SurfaceHolder? = null
+
+    fun attachSurface(holder: SurfaceHolder) {
+        surfaceHolder = holder
+        mediaPlayer?.setDisplay(holder)
+    }
+
+    fun detachSurface(holder: SurfaceHolder) {
+        if (surfaceHolder === holder) {
+            mediaPlayer?.setDisplay(null)
+            surfaceHolder = null
+        }
+    }
+
+    fun play(config: CameraConfig) {
+        val playbackUri = config.toRtspUri(includePassword = true).toString()
+        val previewUri = config.toRtspUri(includePassword = false).toString()
+        _currentPreviewUrl.value = previewUri
+        _statusText.value = "Connecting…"
+        _isPlaying.value = false
+
+        releasePlayer()
+        val player = MediaPlayer().apply {
+            setWakeMode(context, PowerManager.PARTIAL_WAKE_LOCK)
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
+            isLooping = false
+            setOnPreparedListener {
+                it.start()
+                _statusText.value = "Playing"
+                _isPlaying.value = true
+            }
+            setOnCompletionListener {
+                _statusText.value = "Stream ended"
+                _isPlaying.value = false
+                _currentPreviewUrl.value = null
+            }
+            setOnErrorListener { _, what, extra ->
+                _statusText.value = "Error: $what/$extra"
+                _isPlaying.value = false
+                _currentPreviewUrl.value = null
+                true
+            }
+            setOnInfoListener { _, what, _ ->
+                when (what) {
+                    MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
+                        _statusText.value = "Buffering…"
+                        _isPlaying.value = false
+                    }
+
+                    MediaPlayer.MEDIA_INFO_BUFFERING_END,
+                    MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START -> {
+                        _statusText.value = "Playing"
+                        _isPlaying.value = true
+                    }
+                }
+                false
+            }
+        }
+        mediaPlayer = player
+        surfaceHolder?.let { player.setDisplay(it) }
+        try {
+            player.setDataSource(context, Uri.parse(playbackUri))
+            player.prepareAsync()
+        } catch (e: Exception) {
+            _statusText.value = "Error: ${e.message ?: e.javaClass.simpleName}"
+            _currentPreviewUrl.value = null
+            _isPlaying.value = false
+            player.reset()
+            player.release()
+            mediaPlayer = null
+        }
+    }
+
+    fun stop(message: String = "Stopped") {
+        releasePlayer()
+        _statusText.value = message
+        _currentPreviewUrl.value = null
+    }
+
+    fun release() {
+        releasePlayer()
+        _statusText.value = "No camera selected"
+        _currentPreviewUrl.value = null
+    }
+
+    private fun releasePlayer() {
+        val player = mediaPlayer ?: return
+        try {
+            player.setDisplay(null)
+            if (player.isPlaying) {
+                player.stop()
+            }
+        } catch (_: IllegalStateException) {
+            // Ignore illegal state issues while shutting down the player
+        } finally {
+            try {
+                player.reset()
+            } catch (_: IllegalStateException) {
+                // Ignore reset issues if the player was already released
+            }
+            player.release()
+            mediaPlayer = null
+            _isPlaying.value = false
         }
     }
 }
