@@ -63,16 +63,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
-import androidx.media3.common.util.UnstableApi
-import androidx.core.content.edit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -156,7 +157,7 @@ internal data class CameraConfig(
     fun toRtspUri(includePassword: Boolean = false): Uri {
         val normalized = normalized()
         if (normalized.fullUrl.isNotBlank()) {
-            val parsed = Uri.parse(normalized.fullUrl)
+            val parsed = normalized.fullUrl.toUri()
             val sanitizedAuthority = parsed.encodedAuthority?.let { authority ->
                 if (includePassword) authority else sanitizeAuthority(authority)
             }
@@ -191,7 +192,7 @@ internal data class CameraConfig(
 
         val trimmedSlug = normalized.slug.trim()
         val slugUri = if (trimmedSlug.isNotEmpty()) {
-            Uri.parse("rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}")
+            "rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}".toUri()
         } else {
             null
         }
@@ -674,7 +675,7 @@ private fun CameraSlotEditor(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("RTSP URL") },
                 singleLine = true,
-                placeholder = { Text("rtsp://user:pass@host:port/path") }
+                placeholder = { Text("rtsp://host:port/path") }
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
