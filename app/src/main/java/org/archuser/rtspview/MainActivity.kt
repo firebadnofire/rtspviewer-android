@@ -77,6 +77,7 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
+import java.net.URI
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -161,9 +162,10 @@ internal data class CameraConfig(
         val normalized = normalized()
         if (normalized.fullUrl.isNotBlank()) {
             val parsed = Uri.parse(normalized.fullUrl)
-            val sanitizedAuthority = parsed.encodedAuthority?.let { authority ->
-                if (includePassword) authority else sanitizeAuthority(authority)
-            }
+            val sanitizedAuthority = encodedAuthorityWithEncodedCredentials(normalized.fullUrl, includePassword)
+                ?: parsed.encodedAuthority?.let { authority ->
+                    if (includePassword) authority else sanitizeAuthority(authority)
+                }
             return parsed.buildUpon()
                 .apply { sanitizedAuthority?.let { encodedAuthority(it) } }
                 .build()
@@ -221,6 +223,34 @@ internal data class CameraConfig(
             .build()
     }
 
+}
+
+private fun encodedAuthorityWithEncodedCredentials(fullUrl: String, includePassword: Boolean): String? {
+    return try {
+        val parsed = URI(fullUrl)
+        val host = parsed.host ?: return null
+        val portPart = if (parsed.port in 0..65535) ":${parsed.port}" else ""
+        val rawUserInfo = parsed.rawUserInfo
+        val credential = buildString {
+            if (!rawUserInfo.isNullOrEmpty()) {
+                val parts = rawUserInfo.split(":", limit = 2)
+                val encodedUser = Uri.encode(parts.getOrNull(0).orEmpty())
+                if (encodedUser.isNotEmpty()) {
+                    append(encodedUser)
+                    val encodedPass = parts.getOrNull(1)?.let { Uri.encode(it) }
+                    if (includePassword && encodedPass != null) {
+                        append(":")
+                        append(encodedPass)
+                    }
+                    append("@")
+                }
+            }
+        }
+        val authorityHost = if (host.contains(":" ) && !host.startsWith("[")) "[$host]" else host
+        "$credential$authorityHost$portPart"
+    } catch (e: Exception) {
+        null
+    }
 }
 
 private fun sanitizeAuthority(authority: String): String {
