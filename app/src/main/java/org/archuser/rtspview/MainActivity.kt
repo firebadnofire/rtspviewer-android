@@ -61,6 +61,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
@@ -675,6 +678,84 @@ private fun CameraSlotEditor(
                 label = { Text("RTSP URL") },
                 singleLine = true,
                 placeholder = { Text("rtsp://user:pass@host:port/path") }
+            )
+
+            Text(
+                text = "Or build the URL from individual fields:",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.username,
+                    onValueChange = { onConfigChange(config.copy(username = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Username") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = config.password,
+                    onValueChange = { onConfigChange(config.copy(password = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.host,
+                    onValueChange = { onConfigChange(config.copy(host = it)) },
+                    modifier = Modifier.weight(2f),
+                    label = { Text("Host") },
+                    singleLine = true,
+                    placeholder = { Text("camera.local") }
+                )
+                OutlinedTextField(
+                    value = config.port,
+                    onValueChange = { onConfigChange(config.copy(port = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Port") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+
+            OutlinedTextField(
+                value = config.slug,
+                onValueChange = { onConfigChange(config.copy(slug = it)) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Path/slug") },
+                singleLine = true,
+                placeholder = { Text(DEFAULT_CAMERA_SLUG) }
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.channel,
+                    onValueChange = { onConfigChange(config.copy(channel = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Channel") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = config.subtype,
+                    onValueChange = { onConfigChange(config.copy(subtype = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Subtype") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+
+            Text(
+                text = "Preview: ${config.toRtspUri(includePassword = false)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
