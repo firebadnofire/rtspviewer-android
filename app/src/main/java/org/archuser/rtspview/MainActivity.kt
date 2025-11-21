@@ -29,18 +29,25 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,7 +84,11 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import java.net.URI
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -114,6 +125,8 @@ internal enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
+
+private data class LogEntry(val timestamp: Long, val message: String)
 
 internal data class CameraConfig(
     val title: String = "",
@@ -161,7 +174,7 @@ internal data class CameraConfig(
     fun toRtspUri(includePassword: Boolean = false): Uri {
         val normalized = normalized()
         if (normalized.fullUrl.isNotBlank()) {
-            val parsed = Uri.parse(normalized.fullUrl)
+            val parsed = normalized.fullUrl.toUri()
             val sanitizedAuthority = encodedAuthorityWithEncodedCredentials(normalized.fullUrl, includePassword)
                 ?: parsed.encodedAuthority?.let { authority ->
                     if (includePassword) authority else sanitizeAuthority(authority)
@@ -197,7 +210,7 @@ internal data class CameraConfig(
 
         val trimmedSlug = normalized.slug.trim()
         val slugUri = if (trimmedSlug.isNotEmpty()) {
-            Uri.parse("rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}")
+            "rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}".toUri()
         } else {
             null
         }
@@ -248,7 +261,7 @@ private fun encodedAuthorityWithEncodedCredentials(fullUrl: String, includePassw
         }
         val authorityHost = if (host.contains(":" ) && !host.startsWith("[")) "[$host]" else host
         "$credential$authorityHost$portPart"
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }
@@ -286,11 +299,21 @@ fun RtspViewerApp() {
     val editingSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
+    val logEntries = remember { mutableStateListOf<LogEntry>() }
+    val logTimeFormatter = remember { DateTimeFormatter.ofPattern("HH:mm:ss") }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
+    var showLogs by remember { mutableStateOf(false) }
+
+    fun appendLog(message: String) {
+        logEntries.add(0, LogEntry(System.currentTimeMillis(), message))
+        if (logEntries.size > 200) {
+            logEntries.removeLast()
+        }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -344,6 +367,7 @@ fun RtspViewerApp() {
                     Player.STATE_ENDED -> "Stream ended"
                     else -> statusText
                 }
+                appendLog("State changed: $statusText")
             }
 
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
@@ -353,6 +377,7 @@ fun RtspViewerApp() {
             override fun onPlayerError(error: PlaybackException) {
                 val detail = error.message ?: "Unknown"
                 statusText = "Error: ${error.errorCodeName} ($detail)"
+                appendLog("Playback error ${error.errorCodeName}: $detail")
             }
         }
         player.addListener(listener)
@@ -368,6 +393,7 @@ fun RtspViewerApp() {
         currentPreviewUrl = null
         isPlaying = false
         statusText = message
+        appendLog(message)
     }
 
     fun connectToCamera(slotIndex: Int) {
@@ -380,6 +406,7 @@ fun RtspViewerApp() {
         }
 
         val playbackUri = normalized.toRtspUri(includePassword = true)
+        val previewUri = normalized.toRtspUri(includePassword = false)
         val mediaItem = MediaItem.Builder()
             .setUri(playbackUri)
             .setMimeType(MimeTypes.APPLICATION_RTSP)
@@ -402,7 +429,8 @@ fun RtspViewerApp() {
             .createMediaSource(mediaItem)
 
         statusText = "Connecting…"
-        currentPreviewUrl = normalized.toRtspUri(includePassword = false).toString()
+        currentPreviewUrl = previewUri.toString()
+        appendLog("Connecting to ${previewUri} via ${normalized.transport} (timeout ${timeoutMs}ms)")
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
@@ -559,6 +587,81 @@ fun RtspViewerApp() {
                             Text("Settings")
                         }
                     }
+                }
+
+                AnimatedVisibility(
+                    visible = showLogs,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(safeDrawingPadding)
+                        .padding(12.dp)
+                ) {
+                    Surface(
+                        tonalElevation = 4.dp,
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .fillMaxWidth(0.7f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Logs",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                IconButton(onClick = { showLogs = false }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Close logs")
+                                }
+                            }
+                            if (logEntries.isEmpty()) {
+                                Text(
+                                    text = "No log entries yet.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 240.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    items(logEntries) { entry ->
+                                        val time = Instant.ofEpochMilli(entry.timestamp)
+                                            .atZone(ZoneId.systemDefault())
+                                            .toLocalDateTime()
+                                        Text(
+                                            text = "${time.format(logTimeFormatter)} · ${entry.message}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                IconButton(
+                    onClick = { showLogs = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(safeDrawingPadding)
+                        .padding(16.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            shape = MaterialTheme.shapes.small
+                        )
+                ) {
+                    Icon(Icons.Filled.Info, contentDescription = "Open logs")
                 }
             }
         }
