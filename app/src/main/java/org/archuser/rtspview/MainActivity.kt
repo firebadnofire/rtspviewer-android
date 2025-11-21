@@ -5,6 +5,7 @@ package org.archuser.rtspview
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -35,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -76,6 +78,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -95,6 +98,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -121,6 +127,7 @@ private const val HIDE_CONTROLS_DELAY_MS = 5_000L
 private const val DRAG_THRESHOLD = 120f
 private const val PREFS_NAME = "camera_settings"
 private const val PREFS_KEY_SLOTS = "slots"
+private const val PREFS_KEY_LOGS = "logs"
 private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
 
 private enum class AppScreen { Player, Settings, Logs }
@@ -312,11 +319,20 @@ fun RtspViewerApp() {
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
 
+    fun persistLogs() {
+        sharedPreferences.edit {
+            putString(PREFS_KEY_LOGS, serializeLogs(logEntries))
+        }
+    }
+
     fun appendLog(message: String) {
         logEntries.add(0, LogEntry(System.currentTimeMillis(), message))
-        if (logEntries.size > 200) {
-            logEntries.removeLast()
-        }
+        persistLogs()
+    }
+
+    fun clearLogs() {
+        logEntries.clear()
+        persistLogs()
     }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -347,6 +363,12 @@ fun RtspViewerApp() {
         val configs = parseCameraSettings(stored)
         if (configs != null) {
             applyCameraSettings(cameraSlots, configs)
+        }
+        val storedLogs = sharedPreferences.getString(PREFS_KEY_LOGS, null)
+        val parsedLogs = parseLogs(storedLogs)
+        if (parsedLogs != null) {
+            logEntries.clear()
+            logEntries.addAll(parsedLogs)
         }
         hasLoadedSettings = true
     }
@@ -497,9 +519,16 @@ fun RtspViewerApp() {
             AppScreen.Logs -> LogScreen(
                 logEntries = logEntries,
                 logTimeFormatter = logTimeFormatter,
-                onClose = { logsVisible = false },
+                onClose = {
+                    Toast.makeText(context, "Closing logs", Toast.LENGTH_SHORT).show()
+                    logsVisible = false
+                },
                 onCopyLogs = {
                     appendLog("Logs copied to clipboard")
+                },
+                onClearLogs = {
+                    clearLogs()
+                    Toast.makeText(context, "Logs cleared", Toast.LENGTH_SHORT).show()
                 }
             )
             AppScreen.Player -> {
@@ -633,10 +662,12 @@ private fun LogScreen(
     logEntries: List<LogEntry>,
     logTimeFormatter: DateTimeFormatter,
     onClose: () -> Unit,
-    onCopyLogs: (String) -> Unit
+    onCopyLogs: (String) -> Unit,
+    onClearLogs: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+    val context = LocalContext.current
     val formattedLogs = remember(logEntries) {
         logEntries.joinToString(separator = "\n") { entry ->
             val time = Instant.ofEpochMilli(entry.timestamp)
@@ -655,6 +686,7 @@ private fun LogScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -667,9 +699,15 @@ private fun LogScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
                         clipboardManager.setText(AnnotatedString(formattedLogs))
+                        Toast.makeText(context, "Logs copied", Toast.LENGTH_SHORT).show()
                         onCopyLogs(formattedLogs)
                     }) {
                         Text("Copy all")
+                    }
+                    OutlinedButton(onClick = {
+                        onClearLogs()
+                    }) {
+                        Text("Clear")
                     }
                     IconButton(onClick = onClose) {
                         Icon(Icons.Filled.Close, contentDescription = "Close logs")
@@ -710,6 +748,38 @@ private fun LogScreen(
                 }
             }
         }
+    }
+}
+
+private fun serializeLogs(entries: List<LogEntry>): String {
+    val array = JSONArray()
+    entries.forEach { entry ->
+        array.put(
+            JSONObject().apply {
+                put("timestamp", entry.timestamp)
+                put("message", entry.message)
+            }
+        )
+    }
+    return array.toString()
+}
+
+private fun parseLogs(json: String?): List<LogEntry>? {
+    if (json.isNullOrBlank()) return null
+    return try {
+        val array = JSONArray(json)
+        buildList {
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index) ?: continue
+                val timestamp = obj.optLong("timestamp", -1L)
+                val message = obj.optString("message")
+                if (timestamp >= 0 && message.isNotBlank()) {
+                    add(LogEntry(timestamp, message))
+                }
+            }
+        }
+    } catch (_: JSONException) {
+        null
     }
 }
 
