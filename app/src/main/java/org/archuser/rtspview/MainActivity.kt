@@ -626,6 +626,8 @@ fun RtspViewerApp() {
     }
 }
 
+}
+
 @Composable
 private fun LogScreen(
     logEntries: List<LogEntry>,
