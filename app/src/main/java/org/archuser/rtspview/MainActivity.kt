@@ -68,10 +68,12 @@ import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
@@ -120,6 +122,8 @@ private const val DRAG_THRESHOLD = 120f
 private const val PREFS_NAME = "camera_settings"
 private const val PREFS_KEY_SLOTS = "slots"
 private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
+
+private enum class AppScreen { Player, Settings, Logs }
 
 internal enum class RtspTransport(val title: String) {
     TCP("TCP"),
@@ -304,9 +308,9 @@ fun RtspViewerApp() {
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
+    var logsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
-    var showLogs by remember { mutableStateOf(false) }
 
     fun appendLog(message: String) {
         logEntries.add(0, LogEntry(System.currentTimeMillis(), message))
@@ -471,9 +475,16 @@ fun RtspViewerApp() {
         }
     }
 
-    Crossfade(targetState = settingsVisible, label = "settings_screen") { showSettings ->
-        if (showSettings) {
-            SettingsScreen(
+    Crossfade(
+        targetState = when {
+            settingsVisible -> AppScreen.Settings
+            logsVisible -> AppScreen.Logs
+            else -> AppScreen.Player
+        },
+        label = "main_screen"
+    ) { screen ->
+        when (screen) {
+            AppScreen.Settings -> SettingsScreen(
                 slots = editingSlots,
                 selectedIndex = selectedIndex,
                 onSlotChange = { index, updated -> editingSlots[index] = updated },
@@ -483,7 +494,15 @@ fun RtspViewerApp() {
                 onSave = { saveSettings() },
                 onCancel = { settingsVisible = false }
             )
-        } else {
+            AppScreen.Logs -> LogScreen(
+                logEntries = logEntries,
+                logTimeFormatter = logTimeFormatter,
+                onClose = { logsVisible = false },
+                onCopyLogs = {
+                    appendLog("Logs copied to clipboard")
+                }
+            )
+            AppScreen.Player -> {
             val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
 
             Box(
@@ -589,69 +608,8 @@ fun RtspViewerApp() {
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = showLogs,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(safeDrawingPadding)
-                        .padding(12.dp)
-                ) {
-                    Surface(
-                        tonalElevation = 4.dp,
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .fillMaxWidth(0.7f),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Logs",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                IconButton(onClick = { showLogs = false }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Close logs")
-                                }
-                            }
-                            if (logEntries.isEmpty()) {
-                                Text(
-                                    text = "No log entries yet.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                LazyColumn(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = 240.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    items(logEntries) { entry ->
-                                        val time = Instant.ofEpochMilli(entry.timestamp)
-                                            .atZone(ZoneId.systemDefault())
-                                            .toLocalDateTime()
-                                        Text(
-                                            text = "${time.format(logTimeFormatter)} · ${entry.message}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
                 IconButton(
-                    onClick = { showLogs = true },
+                    onClick = { logsVisible = true },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(safeDrawingPadding)
@@ -662,6 +620,91 @@ fun RtspViewerApp() {
                         )
                 ) {
                     Icon(Icons.Filled.Info, contentDescription = "Open logs")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogScreen(
+    logEntries: List<LogEntry>,
+    logTimeFormatter: DateTimeFormatter,
+    onClose: () -> Unit,
+    onCopyLogs: (String) -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+    val formattedLogs = remember(logEntries) {
+        logEntries.joinToString(separator = "\n") { entry ->
+            val time = Instant.ofEpochMilli(entry.timestamp)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDateTime()
+            "${time.format(logTimeFormatter)} · ${entry.message}"
+        }
+    }
+
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Logs",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        clipboardManager.setText(AnnotatedString(formattedLogs))
+                        onCopyLogs(formattedLogs)
+                    }) {
+                        Text("Copy all")
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close logs")
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(safeDrawingPadding),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (logEntries.isEmpty()) {
+                Text(
+                    text = "No log entries yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(logEntries) { entry ->
+                        val time = Instant.ofEpochMilli(entry.timestamp)
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDateTime()
+                        Text(
+                            text = "${time.format(logTimeFormatter)} · ${entry.message}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }
