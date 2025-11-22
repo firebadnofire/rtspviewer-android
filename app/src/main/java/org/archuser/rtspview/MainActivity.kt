@@ -5,6 +5,7 @@ package org.archuser.rtspview
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -31,16 +32,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,15 +63,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -73,10 +89,21 @@ import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
+import androidx.core.net.toUri
+import java.net.InetAddress
+import java.net.URI
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -103,12 +130,17 @@ private const val HIDE_CONTROLS_DELAY_MS = 5_000L
 private const val DRAG_THRESHOLD = 120f
 private const val PREFS_NAME = "camera_settings"
 private const val PREFS_KEY_SLOTS = "slots"
+private const val PREFS_KEY_LOGS = "logs"
 private const val EXPORT_FILE_NAME = "rtsp_cameras.json"
+
+private enum class AppScreen { Player, Settings, Logs }
 
 internal enum class RtspTransport(val title: String) {
     TCP("TCP"),
     UDP("UDP")
 }
+
+private data class LogEntry(val timestamp: Long, val message: String)
 
 internal data class CameraConfig(
     val title: String = "",
@@ -156,10 +188,11 @@ internal data class CameraConfig(
     fun toRtspUri(includePassword: Boolean = false): Uri {
         val normalized = normalized()
         if (normalized.fullUrl.isNotBlank()) {
-            val parsed = Uri.parse(normalized.fullUrl)
-            val sanitizedAuthority = parsed.encodedAuthority?.let { authority ->
-                if (includePassword) authority else sanitizeAuthority(authority)
-            }
+            val parsed = normalized.fullUrl.toUri()
+            val sanitizedAuthority = encodedAuthorityWithEncodedCredentials(normalized.fullUrl, includePassword)
+                ?: parsed.encodedAuthority?.let { authority ->
+                    if (includePassword) authority else sanitizeAuthority(authority)
+                }
             return parsed.buildUpon()
                 .apply { sanitizedAuthority?.let { encodedAuthority(it) } }
                 .build()
@@ -191,7 +224,7 @@ internal data class CameraConfig(
 
         val trimmedSlug = normalized.slug.trim()
         val slugUri = if (trimmedSlug.isNotEmpty()) {
-            Uri.parse("rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}")
+            "rtsp://placeholder${if (trimmedSlug.startsWith("/")) trimmedSlug else "/$trimmedSlug"}".toUri()
         } else {
             null
         }
@@ -219,6 +252,54 @@ internal data class CameraConfig(
 
 }
 
+private fun ensureCredentials(uri: Uri, config: CameraConfig, includePassword: Boolean): Uri {
+    val existingAuthority = uri.encodedAuthority ?: return uri
+    if ("@" in existingAuthority) return uri
+    val normalized = config.normalized()
+    if (normalized.username.isBlank()) return uri
+    val encodedUser = Uri.encode(normalized.username)
+    val encodedPass = normalized.password.takeIf { includePassword && it.isNotBlank() }?.let(Uri::encode)
+    val credential = buildString {
+        append(encodedUser)
+        encodedPass?.let {
+            append(":")
+            append(it)
+        }
+        append("@")
+    }
+    return uri.buildUpon()
+        .encodedAuthority(credential + existingAuthority)
+        .build()
+}
+
+private fun encodedAuthorityWithEncodedCredentials(fullUrl: String, includePassword: Boolean): String? {
+    return try {
+        val parsed = URI(fullUrl)
+        val host = parsed.host ?: return null
+        val portPart = if (parsed.port in 0..65535) ":${parsed.port}" else ""
+        val decodedUserInfo = parsed.rawUserInfo?.let(Uri::decode)
+        val credential = buildString {
+            if (!decodedUserInfo.isNullOrEmpty()) {
+                val parts = decodedUserInfo.split(":", limit = 2)
+                val encodedUser = Uri.encode(parts.getOrNull(0).orEmpty())
+                if (encodedUser.isNotEmpty()) {
+                    append(encodedUser)
+                    val encodedPass = parts.getOrNull(1)?.let { Uri.encode(it) }
+                    if (includePassword && encodedPass != null) {
+                        append(":")
+                        append(encodedPass)
+                    }
+                    append("@")
+                }
+            }
+        }
+        val authorityHost = if (host.contains(":" ) && !host.startsWith("[")) "[$host]" else host
+        "$credential$authorityHost$portPart"
+    } catch (_: Exception) {
+        null
+    }
+}
+
 private fun sanitizeAuthority(authority: String): String {
     val atIndex = authority.lastIndexOf('@')
     if (atIndex <= 0) return authority
@@ -229,7 +310,60 @@ private fun sanitizeAuthority(authority: String): String {
     return if (sanitizedCredential.isEmpty()) hostPart else "$sanitizedCredential@$hostPart"
 }
 
-@OptIn(ExperimentalAnimationApi::class)
+private fun Uri.redactUserInfo(): String {
+    val authority = encodedAuthority ?: return toString()
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return toString()
+    val hostPort = authority.substring(atIndex + 1)
+    return buildUpon()
+        .encodedAuthority(hostPort)
+        .build()
+        .toString()
+}
+
+private fun Uri.maskPassword(): String {
+    val authority = encodedAuthority ?: return toString()
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return toString()
+    val credential = authority.substring(0, atIndex)
+    val hostPort = authority.substring(atIndex + 1)
+    val colonIndex = credential.indexOf(":")
+    val maskedCredential = if (colonIndex >= 0) {
+        credential.substring(0, colonIndex + 1) + "****"
+    } else {
+        credential
+    }
+    return buildUpon()
+        .encodedAuthority("$maskedCredential@$hostPort")
+        .build()
+        .toString()
+}
+
+private fun describePlaybackError(error: PlaybackException): String {
+    val builder = StringBuilder()
+    builder.append(error.errorCodeName)
+    builder.append(" (")
+    builder.append(error.errorCode)
+    builder.append(")")
+    error.message?.let { message ->
+        builder.append(": ")
+        builder.append(message)
+    }
+    var cause: Throwable? = error.cause
+    var depth = 1
+    while (cause != null && depth <= 3) {
+        builder.append(" | cause[")
+        builder.append(depth)
+        builder.append("]: ")
+        builder.append(cause.javaClass.simpleName)
+        cause.message?.let { builder.append(": ").append(it) }
+        cause = cause.cause
+        depth++
+    }
+    return builder.toString()
+}
+
+@OptIn(ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 @UnstableApi
 @Composable
 fun RtspViewerApp() {
@@ -252,11 +386,30 @@ fun RtspViewerApp() {
     val editingSlots = remember {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
+    val logEntries = remember { mutableStateListOf<LogEntry>() }
+    val logTimeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
+    var logsVisible by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var hasLoadedSettings by remember { mutableStateOf(false) }
+
+    fun persistLogs() {
+        sharedPreferences.edit {
+            putString(PREFS_KEY_LOGS, serializeLogs(logEntries))
+        }
+    }
+
+    fun appendLog(message: String) {
+        logEntries.add(0, LogEntry(System.currentTimeMillis(), message))
+        persistLogs()
+    }
+
+    fun clearLogs() {
+        logEntries.clear()
+        persistLogs()
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -287,6 +440,12 @@ fun RtspViewerApp() {
         if (configs != null) {
             applyCameraSettings(cameraSlots, configs)
         }
+        val storedLogs = sharedPreferences.getString(PREFS_KEY_LOGS, null)
+        val parsedLogs = parseLogs(storedLogs)
+        if (parsedLogs != null) {
+            logEntries.clear()
+            logEntries.addAll(parsedLogs)
+        }
         hasLoadedSettings = true
     }
 
@@ -310,6 +469,7 @@ fun RtspViewerApp() {
                     Player.STATE_ENDED -> "Stream ended"
                     else -> statusText
                 }
+                appendLog("State changed: $statusText")
             }
 
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
@@ -319,6 +479,7 @@ fun RtspViewerApp() {
             override fun onPlayerError(error: PlaybackException) {
                 val detail = error.message ?: "Unknown"
                 statusText = "Error: ${error.errorCodeName} ($detail)"
+                appendLog("Playback error: ${describePlaybackError(error)}")
             }
         }
         player.addListener(listener)
@@ -334,6 +495,7 @@ fun RtspViewerApp() {
         currentPreviewUrl = null
         isPlaying = false
         statusText = message
+        appendLog(message)
     }
 
     fun connectToCamera(slotIndex: Int) {
@@ -345,7 +507,18 @@ fun RtspViewerApp() {
             return
         }
 
-        val playbackUri = normalized.toRtspUri(includePassword = true)
+        val playbackUri = ensureCredentials(
+            uri = normalized.toRtspUri(includePassword = true),
+            config = normalized,
+            includePassword = true
+        )
+        val previewUri = ensureCredentials(
+            uri = normalized.toRtspUri(includePassword = false),
+            config = normalized,
+            includePassword = false
+        )
+        val playbackLogUri = playbackUri.maskPassword()
+        val previewDisplay = previewUri.redactUserInfo()
         val mediaItem = MediaItem.Builder()
             .setUri(playbackUri)
             .setMimeType(MimeTypes.APPLICATION_RTSP)
@@ -363,12 +536,59 @@ fun RtspViewerApp() {
 
         val timeoutMs = max(5_000, normalized.latencyMs * 10).toLong()
         val mediaSource = RtspMediaSource.Factory()
+            .setDebugLoggingEnabled(true)
             .setForceUseRtpTcp(normalized.transport == RtspTransport.TCP)
             .setTimeoutMs(timeoutMs)
             .createMediaSource(mediaItem)
 
+        val authority = playbackUri.encodedAuthority ?: playbackUri.authority
+        val userInfo = runCatching { URI(playbackUri.toString()).rawUserInfo }.getOrNull()
+        val maskedUserInfo = userInfo?.let {
+            val username = it.substringBefore(":")
+            if (username.isEmpty()) "(missing)" else "$username:****"
+        } ?: "(none)"
+        val host = playbackUri.host.orEmpty()
+        val port = playbackUri.port.takeIf { it > 0 }?.toString() ?: DEFAULT_PORT
+        if (host.isBlank()) {
+            stopPlayback("Invalid RTSP URI: missing host")
+            appendLog("Playback URI rejected: missing host in $authority")
+            return
+        }
+
         statusText = "Connecting…"
-        currentPreviewUrl = normalized.toRtspUri(includePassword = false).toString()
+        currentPreviewUrl = previewDisplay
+        appendLog("Prepared RTSP playback URI: $playbackLogUri")
+        appendLog("Playback URI (exact): ${playbackUri}")
+        appendLog("Playback authority: ${authority ?: "(none)"} (user=$maskedUserInfo, host=$host, port=$port)")
+        mediaItem.localConfiguration?.uri?.let { resolved ->
+            if (resolved != playbackUri) {
+                appendLog("MediaItem resolved URI differs: $resolved")
+            }
+            appendLog("MediaItem configuration URI: $resolved")
+        }
+        appendLog("Preview URI (redacted): $previewDisplay")
+        appendLog("Connecting to $playbackLogUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
+        if (host == "localhost" || host == "127.0.0.1") {
+            appendLog("Warning: RTSP host resolves to loopback; verify camera address")
+        }
+        coroutineScope.launch(Dispatchers.IO) {
+            val resolved = try {
+                InetAddress.getAllByName(host)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    appendLog("Failed to resolve $host: ${e.message ?: e.javaClass.simpleName}")
+                }
+                null
+            }
+            resolved?.takeIf { it.isNotEmpty() }?.joinToString { address ->
+                val tag = if (address.isLoopbackAddress) "loopback" else "remote"
+                "${address.hostAddress} ($tag)"
+            }?.let { addresses ->
+                withContext(Dispatchers.Main) {
+                    appendLog("DNS for $host → $addresses")
+                }
+            }
+        }
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
@@ -409,9 +629,16 @@ fun RtspViewerApp() {
         }
     }
 
-    Crossfade(targetState = settingsVisible, label = "settings_screen") { showSettings ->
-        if (showSettings) {
-            SettingsScreen(
+    Crossfade(
+        targetState = when {
+            settingsVisible -> AppScreen.Settings
+            logsVisible -> AppScreen.Logs
+            else -> AppScreen.Player
+        },
+        label = "main_screen"
+    ) { screen ->
+        when (screen) {
+            AppScreen.Settings -> SettingsScreen(
                 slots = editingSlots,
                 selectedIndex = selectedIndex,
                 onSlotChange = { index, updated -> editingSlots[index] = updated },
@@ -421,41 +648,56 @@ fun RtspViewerApp() {
                 onSave = { saveSettings() },
                 onCancel = { settingsVisible = false }
             )
-        } else {
-            val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+            AppScreen.Logs -> LogScreen(
+                logEntries = logEntries,
+                logTimeFormatter = logTimeFormatter,
+                onClose = {
+                    Toast.makeText(context, "Closing logs", Toast.LENGTH_SHORT).show()
+                    logsVisible = false
+                },
+                onCopyLogs = {
+                    appendLog("Logs copied to clipboard")
+                },
+                onClearLogs = {
+                    clearLogs()
+                    Toast.makeText(context, "Logs cleared", Toast.LENGTH_SHORT).show()
+                }
+            )
+            AppScreen.Player -> {
+                val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .pointerInput(selectedIndex) {
-                        detectDragGestures(
-                            onDragStart = { dragOffset = 0f },
-                            onDrag = { change, dragAmount ->
-                                dragOffset += dragAmount.x
-                                @Suppress("DEPRECATION")
-                                change.consumePositionChange()
-                            },
-                            onDragEnd = {
-                                when {
-                                    dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
-                                    dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .pointerInput(selectedIndex) {
+                            detectDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDrag = { change, dragAmount ->
+                                    dragOffset += dragAmount.x
+                                    @Suppress("DEPRECATION")
+                                    change.consumePositionChange()
+                                },
+                                onDragEnd = {
+                                    when {
+                                        dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
+                                        dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = {
+                                    dragOffset = 0f
                                 }
-                                dragOffset = 0f
-                            },
-                            onDragCancel = {
-                                dragOffset = 0f
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controlsVisible = true
-                            }
-                        )
-                    }
-            ) {
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = {
+                                    controlsVisible = true
+                                }
+                            )
+                        }
+                ) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
@@ -526,8 +768,145 @@ fun RtspViewerApp() {
                         }
                     }
                 }
+
+                IconButton(
+                    onClick = { logsVisible = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(safeDrawingPadding)
+                        .padding(16.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            shape = MaterialTheme.shapes.small
+                        )
+                ) {
+                    Icon(Icons.Filled.Info, contentDescription = "Open logs")
+                }
             }
         }
+    }
+}
+}
+
+@Composable
+private fun LogScreen(
+    logEntries: List<LogEntry>,
+    logTimeFormatter: SimpleDateFormat,
+    onClose: () -> Unit,
+    onCopyLogs: (String) -> Unit,
+    onClearLogs: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+    val context = LocalContext.current
+    val formattedLogs = remember(logEntries) {
+        logEntries.joinToString(separator = "\n") { entry ->
+            val time = Date(entry.timestamp)
+            "${logTimeFormatter.format(time)} · ${entry.message}"
+        }
+    }
+
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Logs",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        clipboardManager.setText(AnnotatedString(formattedLogs))
+                        Toast.makeText(context, "Logs copied", Toast.LENGTH_SHORT).show()
+                        onCopyLogs(formattedLogs)
+                    }) {
+                        Text("Copy all")
+                    }
+                    OutlinedButton(onClick = {
+                        onClearLogs()
+                    }) {
+                        Text("Clear")
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close logs")
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(safeDrawingPadding),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (logEntries.isEmpty()) {
+                Text(
+                    text = "No log entries yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(logEntries) { entry ->
+                        val time = Date(entry.timestamp)
+                        Text(
+                            text = "${logTimeFormatter.format(time)} · ${entry.message}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun serializeLogs(entries: List<LogEntry>): String {
+    val array = JSONArray()
+    entries.forEach { entry ->
+        array.put(
+            JSONObject().apply {
+                put("timestamp", entry.timestamp)
+                put("message", entry.message)
+            }
+        )
+    }
+    return array.toString()
+}
+
+private fun parseLogs(json: String?): List<LogEntry>? {
+    if (json.isNullOrBlank()) return null
+    return try {
+        val array = JSONArray(json)
+        buildList {
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index) ?: continue
+                val timestamp = obj.optLong("timestamp", -1L)
+                val message = obj.optString("message")
+                if (timestamp >= 0 && message.isNotBlank()) {
+                    add(LogEntry(timestamp, message))
+                }
+            }
+        }
+    } catch (_: JSONException) {
+        null
     }
 }
 
@@ -675,6 +1054,84 @@ private fun CameraSlotEditor(
                 label = { Text("RTSP URL") },
                 singleLine = true,
                 placeholder = { Text("rtsp://user:pass@host:port/path") }
+            )
+
+            Text(
+                text = "Or build the URL from individual fields:",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.username,
+                    onValueChange = { onConfigChange(config.copy(username = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Username") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = config.password,
+                    onValueChange = { onConfigChange(config.copy(password = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.host,
+                    onValueChange = { onConfigChange(config.copy(host = it)) },
+                    modifier = Modifier.weight(2f),
+                    label = { Text("Host") },
+                    singleLine = true,
+                    placeholder = { Text("camera.local") }
+                )
+                OutlinedTextField(
+                    value = config.port,
+                    onValueChange = { onConfigChange(config.copy(port = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Port") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+
+            OutlinedTextField(
+                value = config.slug,
+                onValueChange = { onConfigChange(config.copy(slug = it)) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Path/slug") },
+                singleLine = true,
+                placeholder = { Text(DEFAULT_CAMERA_SLUG) }
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = config.channel,
+                    onValueChange = { onConfigChange(config.copy(channel = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Channel") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                OutlinedTextField(
+                    value = config.subtype,
+                    onValueChange = { onConfigChange(config.copy(subtype = it)) },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Subtype") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+
+            Text(
+                text = "Preview: ${config.toRtspUri(includePassword = false)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
