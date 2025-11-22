@@ -543,40 +543,40 @@ fun RtspViewerApp() {
                 }
             )
             AppScreen.Player -> {
-            val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+                val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .pointerInput(selectedIndex) {
-                        detectDragGestures(
-                            onDragStart = { dragOffset = 0f },
-                            onDrag = { change, dragAmount ->
-                                dragOffset += dragAmount.x
-                                @Suppress("DEPRECATION")
-                                change.consumePositionChange()
-                            },
-                            onDragEnd = {
-                                when {
-                                    dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
-                                    dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .pointerInput(selectedIndex) {
+                            detectDragGestures(
+                                onDragStart = { dragOffset = 0f },
+                                onDrag = { change, dragAmount ->
+                                    dragOffset += dragAmount.x
+                                    @Suppress("DEPRECATION")
+                                    change.consumePositionChange()
+                                },
+                                onDragEnd = {
+                                    when {
+                                        dragOffset > DRAG_THRESHOLD -> selectSlot(selectedIndex - 1, connect = true)
+                                        dragOffset < -DRAG_THRESHOLD -> selectSlot(selectedIndex + 1, connect = true)
+                                    }
+                                    dragOffset = 0f
+                                },
+                                onDragCancel = {
+                                    dragOffset = 0f
                                 }
-                                dragOffset = 0f
-                            },
-                            onDragCancel = {
-                                dragOffset = 0f
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controlsVisible = true
-                            }
-                        )
-                    }
-            ) {
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = {
+                                    controlsVisible = true
+                                }
+                            )
+                        }
+                ) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
@@ -664,6 +664,7 @@ fun RtspViewerApp() {
             }
         }
     }
+}
 }
 
 @Composable
