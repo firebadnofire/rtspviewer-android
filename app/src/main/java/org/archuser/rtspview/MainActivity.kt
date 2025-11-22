@@ -254,7 +254,7 @@ private fun encodedAuthorityWithEncodedCredentials(fullUrl: String, includePassw
         val parsed = URI(fullUrl)
         val host = parsed.host ?: return null
         val portPart = if (parsed.port in 0..65535) ":${parsed.port}" else ""
-        val decodedUserInfo = parsed.userInfo
+        val decodedUserInfo = parsed.rawUserInfo?.let(Uri::decode)
         val credential = buildString {
             if (!decodedUserInfo.isNullOrEmpty()) {
                 val parts = decodedUserInfo.split(":", limit = 2)
