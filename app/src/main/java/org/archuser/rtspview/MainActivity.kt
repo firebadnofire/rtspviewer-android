@@ -336,6 +336,30 @@ private fun Uri.maskPassword(): String {
         .toString()
 }
 
+private fun describePlaybackError(error: PlaybackException): String {
+    val builder = StringBuilder()
+    builder.append(error.errorCodeName)
+    builder.append(" (")
+    builder.append(error.errorCode)
+    builder.append(")")
+    error.message?.let { message ->
+        builder.append(": ")
+        builder.append(message)
+    }
+    var cause: Throwable? = error.cause
+    var depth = 1
+    while (cause != null && depth <= 3) {
+        builder.append(" | cause[")
+        builder.append(depth)
+        builder.append("]: ")
+        builder.append(cause.javaClass.simpleName)
+        cause.message?.let { builder.append(": ").append(it) }
+        cause = cause.cause
+        depth++
+    }
+    return builder.toString()
+}
+
 @OptIn(ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 @UnstableApi
 @Composable
@@ -452,7 +476,7 @@ fun RtspViewerApp() {
             override fun onPlayerError(error: PlaybackException) {
                 val detail = error.message ?: "Unknown"
                 statusText = "Error: ${error.errorCodeName} ($detail)"
-                appendLog("Playback error ${error.errorCodeName}: $detail")
+                appendLog("Playback error: ${describePlaybackError(error)}")
             }
         }
         player.addListener(listener)
@@ -517,6 +541,12 @@ fun RtspViewerApp() {
         currentPreviewUrl = previewDisplay
         appendLog("Prepared RTSP playback URI: $playbackLogUri")
         appendLog("Playback URI (exact): ${playbackUri}")
+        mediaItem.localConfiguration?.uri?.let { resolved ->
+            if (resolved != playbackUri) {
+                appendLog("MediaItem resolved URI differs: $resolved")
+            }
+            appendLog("MediaItem configuration URI: $resolved")
+        }
         appendLog("Preview URI (redacted): $previewDisplay")
         appendLog("Connecting to $playbackLogUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
         player.stop()
