@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -287,6 +286,17 @@ private fun sanitizeAuthority(authority: String): String {
     return if (sanitizedCredential.isEmpty()) hostPart else "$sanitizedCredential@$hostPart"
 }
 
+private fun Uri.redactUserInfo(): String {
+    val authority = encodedAuthority ?: return toString()
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return toString()
+    val hostPort = authority.substring(atIndex + 1)
+    return buildUpon()
+        .encodedAuthority(hostPort)
+        .build()
+        .toString()
+}
+
 @OptIn(ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 @UnstableApi
 @Composable
@@ -433,6 +443,7 @@ fun RtspViewerApp() {
 
         val playbackUri = normalized.toRtspUri(includePassword = true)
         val previewUri = normalized.toRtspUri(includePassword = false)
+        val previewDisplay = previewUri.redactUserInfo()
         val mediaItem = MediaItem.Builder()
             .setUri(playbackUri)
             .setMimeType(MimeTypes.APPLICATION_RTSP)
@@ -455,8 +466,8 @@ fun RtspViewerApp() {
             .createMediaSource(mediaItem)
 
         statusText = "Connecting…"
-        currentPreviewUrl = previewUri.toString()
-        appendLog("Connecting to $previewUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
+        currentPreviewUrl = previewDisplay
+        appendLog("Connecting to $previewDisplay via ${normalized.transport} (timeout ${timeoutMs}ms)")
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
@@ -653,8 +664,6 @@ fun RtspViewerApp() {
             }
         }
     }
-}
-
 }
 
 @Composable
