@@ -91,9 +91,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import java.net.URI
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -311,7 +311,7 @@ fun RtspViewerApp() {
         mutableStateListOf<CameraConfig>().apply { repeat(SLOT_COUNT) { add(CameraConfig()) } }
     }
     val logEntries = remember { mutableStateListOf<LogEntry>() }
-    val logTimeFormatter = remember { DateTimeFormatter.ofPattern("HH:mm:ss") }
+    val logTimeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
     var settingsVisible by remember { mutableStateOf(false) }
@@ -456,7 +456,7 @@ fun RtspViewerApp() {
 
         statusText = "Connecting…"
         currentPreviewUrl = previewUri.toString()
-        appendLog("Connecting to ${previewUri} via ${normalized.transport} (timeout ${timeoutMs}ms)")
+        appendLog("Connecting to $previewUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
@@ -660,7 +660,7 @@ fun RtspViewerApp() {
 @Composable
 private fun LogScreen(
     logEntries: List<LogEntry>,
-    logTimeFormatter: DateTimeFormatter,
+    logTimeFormatter: SimpleDateFormat,
     onClose: () -> Unit,
     onCopyLogs: (String) -> Unit,
     onClearLogs: () -> Unit
@@ -670,10 +670,8 @@ private fun LogScreen(
     val context = LocalContext.current
     val formattedLogs = remember(logEntries) {
         logEntries.joinToString(separator = "\n") { entry ->
-            val time = Instant.ofEpochMilli(entry.timestamp)
-                .atZone(ZoneId.systemDefault())
-                .toLocalDateTime()
-            "${time.format(logTimeFormatter)} · ${entry.message}"
+            val time = Date(entry.timestamp)
+            "${logTimeFormatter.format(time)} · ${entry.message}"
         }
     }
 
@@ -736,11 +734,9 @@ private fun LogScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(logEntries) { entry ->
-                        val time = Instant.ofEpochMilli(entry.timestamp)
-                            .atZone(ZoneId.systemDefault())
-                            .toLocalDateTime()
+                        val time = Date(entry.timestamp)
                         Text(
-                            text = "${time.format(logTimeFormatter)} · ${entry.message}",
+                            text = "${logTimeFormatter.format(time)} · ${entry.message}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
