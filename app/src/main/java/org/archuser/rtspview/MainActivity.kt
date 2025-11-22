@@ -318,6 +318,24 @@ private fun Uri.redactUserInfo(): String {
         .toString()
 }
 
+private fun Uri.maskPassword(): String {
+    val authority = encodedAuthority ?: return toString()
+    val atIndex = authority.lastIndexOf('@')
+    if (atIndex <= 0) return toString()
+    val credential = authority.substring(0, atIndex)
+    val hostPort = authority.substring(atIndex + 1)
+    val colonIndex = credential.indexOf(":")
+    val maskedCredential = if (colonIndex >= 0) {
+        credential.substring(0, colonIndex + 1) + "****"
+    } else {
+        credential
+    }
+    return buildUpon()
+        .encodedAuthority("$maskedCredential@$hostPort")
+        .build()
+        .toString()
+}
+
 @OptIn(ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 @UnstableApi
 @Composable
@@ -472,6 +490,7 @@ fun RtspViewerApp() {
             config = normalized,
             includePassword = false
         )
+        val playbackLogUri = playbackUri.maskPassword()
         val previewDisplay = previewUri.redactUserInfo()
         val mediaItem = MediaItem.Builder()
             .setUri(playbackUri)
@@ -496,7 +515,10 @@ fun RtspViewerApp() {
 
         statusText = "Connecting…"
         currentPreviewUrl = previewDisplay
-        appendLog("Connecting to $previewDisplay via ${normalized.transport} (timeout ${timeoutMs}ms)")
+        appendLog("Prepared RTSP playback URI: $playbackLogUri")
+        appendLog("Playback URI (exact): ${playbackUri}")
+        appendLog("Preview URI (redacted): $previewDisplay")
+        appendLog("Connecting to $playbackLogUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
