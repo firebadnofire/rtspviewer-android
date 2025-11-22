@@ -90,13 +90,16 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.common.util.UnstableApi
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import java.net.InetAddress
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.archuser.rtspview.ui.theme.RTSPViewTheme
 import org.json.JSONArray
 import org.json.JSONException
@@ -533,14 +536,30 @@ fun RtspViewerApp() {
 
         val timeoutMs = max(5_000, normalized.latencyMs * 10).toLong()
         val mediaSource = RtspMediaSource.Factory()
+            .setDebugLoggingEnabled(true)
             .setForceUseRtpTcp(normalized.transport == RtspTransport.TCP)
             .setTimeoutMs(timeoutMs)
             .createMediaSource(mediaItem)
+
+        val authority = playbackUri.encodedAuthority ?: playbackUri.authority
+        val userInfo = runCatching { URI(playbackUri.toString()).rawUserInfo }.getOrNull()
+        val maskedUserInfo = userInfo?.let {
+            val username = it.substringBefore(":")
+            if (username.isEmpty()) "(missing)" else "$username:****"
+        } ?: "(none)"
+        val host = playbackUri.host.orEmpty()
+        val port = playbackUri.port.takeIf { it > 0 }?.toString() ?: DEFAULT_PORT
+        if (host.isBlank()) {
+            stopPlayback("Invalid RTSP URI: missing host")
+            appendLog("Playback URI rejected: missing host in $authority")
+            return
+        }
 
         statusText = "Connecting…"
         currentPreviewUrl = previewDisplay
         appendLog("Prepared RTSP playback URI: $playbackLogUri")
         appendLog("Playback URI (exact): ${playbackUri}")
+        appendLog("Playback authority: ${authority ?: "(none)"} (user=$maskedUserInfo, host=$host, port=$port)")
         mediaItem.localConfiguration?.uri?.let { resolved ->
             if (resolved != playbackUri) {
                 appendLog("MediaItem resolved URI differs: $resolved")
@@ -549,6 +568,27 @@ fun RtspViewerApp() {
         }
         appendLog("Preview URI (redacted): $previewDisplay")
         appendLog("Connecting to $playbackLogUri via ${normalized.transport} (timeout ${timeoutMs}ms)")
+        if (host == "localhost" || host == "127.0.0.1") {
+            appendLog("Warning: RTSP host resolves to loopback; verify camera address")
+        }
+        coroutineScope.launch(Dispatchers.IO) {
+            val resolved = try {
+                InetAddress.getAllByName(host)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    appendLog("Failed to resolve $host: ${e.message ?: e.javaClass.simpleName}")
+                }
+                null
+            }
+            resolved?.takeIf { it.isNotEmpty() }?.joinToString { address ->
+                val tag = if (address.isLoopbackAddress) "loopback" else "remote"
+                "${address.hostAddress} ($tag)"
+            }?.let { addresses ->
+                withContext(Dispatchers.Main) {
+                    appendLog("DNS for $host → $addresses")
+                }
+            }
+        }
         player.stop()
         player.setMediaSource(mediaSource, /* resetPosition= */ true)
         player.prepare()
