@@ -249,6 +249,26 @@ internal data class CameraConfig(
 
 }
 
+private fun ensureCredentials(uri: Uri, config: CameraConfig, includePassword: Boolean): Uri {
+    val existingAuthority = uri.encodedAuthority ?: return uri
+    if ("@" in existingAuthority) return uri
+    val normalized = config.normalized()
+    if (normalized.username.isBlank()) return uri
+    val encodedUser = Uri.encode(normalized.username)
+    val encodedPass = normalized.password.takeIf { includePassword && it.isNotBlank() }?.let(Uri::encode)
+    val credential = buildString {
+        append(encodedUser)
+        encodedPass?.let {
+            append(":")
+            append(it)
+        }
+        append("@")
+    }
+    return uri.buildUpon()
+        .encodedAuthority(credential + existingAuthority)
+        .build()
+}
+
 private fun encodedAuthorityWithEncodedCredentials(fullUrl: String, includePassword: Boolean): String? {
     return try {
         val parsed = URI(fullUrl)
@@ -442,8 +462,16 @@ fun RtspViewerApp() {
             return
         }
 
-        val playbackUri = normalized.toRtspUri(includePassword = true)
-        val previewUri = normalized.toRtspUri(includePassword = false)
+        val playbackUri = ensureCredentials(
+            uri = normalized.toRtspUri(includePassword = true),
+            config = normalized,
+            includePassword = true
+        )
+        val previewUri = ensureCredentials(
+            uri = normalized.toRtspUri(includePassword = false),
+            config = normalized,
+            includePassword = false
+        )
         val previewDisplay = previewUri.redactUserInfo()
         val mediaItem = MediaItem.Builder()
             .setUri(playbackUri)
